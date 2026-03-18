@@ -14,6 +14,7 @@ input int      StartHour = 3;           // Start (HH)
 input int      StartMinute = 0;          // Start (MM)
 input int      EndHour = 12;             // End (HH)
 input int      EndMinute = 0;            // End (MM)
+input color    RangeColor = C'52,101,164'; // Range Color (CadetBlue = 52,101,164)
 
 //--- RISK MANAGEMENT
 input string   RISK_MANAGEMENT = "--- RISK MANAGEMENT ---";
@@ -41,12 +42,25 @@ input bool     UseTrailing = false;       // Activate Trailing Stoploss
 input int      TrailingTrigger = 500;     // Trigger Distance (TSL)
 input int      TrailingDistance = 700;    // Trailing Distance (TSL)
 
+//--- ENTRY CHARACTERISTICS (berdasarkan pola dari data transaksi)
+input string   ENTRY_CHARACTERISTICS = "--- ENTRY CHARACTERISTICS ---";
+input int      EntryLevels = 3;           // Jumlah level entry (1-5)
+input int      LevelDistance = 50;        // Jarak antar level (points)
+input bool     UseFibonacci = true;       // Gunakan Fibonacci levels
+input double   FibLevel1 = 0.236;         // Fibonacci level 1
+input double   FibLevel2 = 0.382;         // Fibonacci level 2
+input double   FibLevel3 = 0.618;         // Fibonacci level 3
+input double   FibLevel4 = 0.786;         // Fibonacci level 4
+input bool     UseBreakout = false;       // Gunakan breakout (false = pending order terus)
+
 //--- GLOBAL VARIABLES
 double sessionHigh, sessionLow;
 datetime sessionStartTime, sessionEndTime;
 bool isSessionActive;
 double pointValue;
 double pipValue;
+long chartId;
+string rectName = "RangeSessionRect";
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -61,6 +75,10 @@ int OnInit()
    sessionHigh = 0;
    sessionLow = 0;
    isSessionActive = false;
+   chartId = ChartID();
+   
+   //--- Hapus rectangle lama jika ada
+   ObjectDelete(chartId, rectName);
    
    Print("EA Range Session Scalper initialized. Magic: ", MagicNumber);
    return(INIT_SUCCEEDED);
@@ -71,6 +89,8 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   //--- Hapus rectangle
+   ObjectDelete(chartId, rectName);
    Print("EA deinitialized. Reason: ", reason);
 }
 
@@ -82,26 +102,32 @@ void OnTick()
    //--- Update session range
    UpdateSessionRange();
    
+   //--- Gambar kotak session
+   DrawSessionRange();
+   
    //--- Cek apakah perlu close trades/orders berdasarkan jam
    CheckCloseByHour();
+   
+   //--- Cek partial TP
+   CheckPartialTP();
    
    //--- Jika session aktif, catat high/low
    if(isSessionActive)
    {
-      double currentHigh = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double currentLow = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       
-      if(currentHigh > sessionHigh) sessionHigh = currentHigh;
-      if(currentLow < sessionLow || sessionLow == 0) sessionLow = currentLow;
+      if(currentBid > sessionHigh) sessionHigh = currentBid;
+      if(currentAsk < sessionLow || sessionLow == 0) sessionLow = currentAsk;
    }
    
-   //--- Setelah session berakhir, hitung SL dan pasang order
+   //--- Setelah session berakhir, pasang pending order di MULTIPLE LEVELS
    static datetime lastSessionEnd = 0;
    if(TimeCurrent() >= sessionEndTime && lastSessionEnd != sessionEndTime)
    {
       if(sessionHigh > 0 && sessionLow > 0)
       {
-         PlacePendingOrders();
+         PlaceMultipleLevelOrders();
          lastSessionEnd = sessionEndTime;
       }
    }
@@ -109,7 +135,7 @@ void OnTick()
    //--- Trailing stop (jika diaktifkan)
    if(UseTrailing)
    {
-         DoTrailingStop();
+      DoTrailingStop();
    }
 }
 
@@ -124,9 +150,9 @@ void UpdateSessionRange()
    
    //--- Tentukan waktu mulai dan selesai session untuk hari ini
    datetime todayStart = StringToTime(StringFormat("%04d.%02d.%02d %02d:%02d:00", 
-                                    dt.year, dt.month, dt.day, StartHour, StartMinute));
+                                    dt.year, dt.mon, dt.day, StartHour, StartMinute));
    datetime todayEnd = StringToTime(StringFormat("%04d.%02d.%02d %02d:%02d:00", 
-                                  dt.year, dt.month, dt.day, EndHour, EndMinute));
+                                  dt.year, dt.mon, dt.day, EndHour, EndMinute));
    
    //--- Jika session melewati tengah malam, sesuaikan
    if(EndHour < StartHour || (EndHour == StartHour && EndMinute <= StartMinute))
@@ -163,6 +189,373 @@ void UpdateSessionRange()
 }
 
 //+------------------------------------------------------------------+
+//| Gambar kotak untuk area session                                 |
+//+------------------------------------------------------------------+
+void DrawSessionRange()
+{
+   datetime currentTime = TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(currentTime, dt);
+   
+   //--- Tentukan waktu mulai dan selesai session untuk hari ini
+   datetime todayStart = StringToTime(StringFormat("%04d.%02d.%02d %02d:%02d:00", 
+                                    dt.year, dt.mon, dt.day, StartHour, StartMinute));
+   datetime todayEnd = StringToTime(StringFormat("%04d.%02d.%02d %02d:%02d:00", 
+                                  dt.year, dt.mon, dt.day, EndHour, EndMinute));
+   
+   //--- Jika session melewati tengah malam, sesuaikan
+   if(EndHour < StartHour || (EndHour == StartHour && EndMinute <= StartMinute))
+   {
+      if(currentTime < todayEnd)
+         todayStart -= 24 * 3600; // Session kemarin
+      else
+         todayEnd += 24 * 3600;   // Session besok
+   }
+   
+   //--- Cari high/low untuk periode session (gunakan fungsi Custom)
+   double sessionHighPrice = GetHighForPeriod(todayStart, todayEnd);
+   double sessionLowPrice = GetLowForPeriod(todayStart, todayEnd);
+   
+   //--- Gambar rectangle
+   if(ObjectFind(chartId, rectName) < 0)
+   {
+      ObjectCreate(chartId, rectName, OBJ_RECTANGLE, 0, todayStart, sessionHighPrice, todayEnd, sessionLowPrice);
+      ObjectSetInteger(chartId, rectName, OBJPROP_COLOR, RangeColor);
+      ObjectSetInteger(chartId, rectName, OBJPROP_STYLE, STYLE_SOLID);
+      ObjectSetInteger(chartId, rectName, OBJPROP_WIDTH, 1);
+      ObjectSetInteger(chartId, rectName, OBJPROP_BACK, true); // Di belakang candlestick
+      ObjectSetInteger(chartId, rectName, OBJPROP_FILL, true); // Diisi warna
+      ObjectSetInteger(chartId, rectName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(chartId, rectName, OBJPROP_HIDDEN, true);
+   }
+   else
+   {
+      // Update rectangle
+      ObjectMove(chartId, rectName, 0, todayStart, sessionHighPrice);
+      ObjectMove(chartId, rectName, 1, todayEnd, sessionLowPrice);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Mendapatkan harga tertinggi untuk periode tertentu              |
+//+------------------------------------------------------------------+
+double GetHighForPeriod(datetime startTime, datetime endTime)
+{
+   double high = 0;
+   int startShift = GetBarShift(_Symbol, PERIOD_CURRENT, startTime);
+   int endShift = GetBarShift(_Symbol, PERIOD_CURRENT, endTime);
+   
+   if(startShift < 0 || endShift < 0) return SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   
+   for(int i = startShift; i >= endShift; i--)
+   {
+      double barHigh = GetBarHigh(_Symbol, PERIOD_CURRENT, i);
+      if(barHigh > high) high = barHigh;
+   }
+   
+   return high;
+}
+
+//+------------------------------------------------------------------+
+//| Mendapatkan harga terendah untuk periode tertentu               |
+//+------------------------------------------------------------------+
+double GetLowForPeriod(datetime startTime, datetime endTime)
+{
+   double low = DBL_MAX;
+   int startShift = GetBarShift(_Symbol, PERIOD_CURRENT, startTime);
+   int endShift = GetBarShift(_Symbol, PERIOD_CURRENT, endTime);
+   
+   if(startShift < 0 || endShift < 0) return SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   
+   for(int i = startShift; i >= endShift; i--)
+   {
+      double barLow = GetBarLow(_Symbol, PERIOD_CURRENT, i);
+      if(barLow < low) low = barLow;
+   }
+   
+   return low;
+}
+
+//+------------------------------------------------------------------+
+//| Custom iBarShift (tidak override built-in)                      |
+//+------------------------------------------------------------------+
+int GetBarShift(string symbol, ENUM_TIMEFRAMES tf, datetime time)
+{
+   datetime times[];
+   ArraySetAsSeries(times, true);
+   int bars = CopyTime(symbol, tf, 0, 1000, times);
+   if(bars < 0) return -1;
+   
+   for(int i = 0; i < bars; i++)
+   {
+      if(time >= times[i])
+         return i;
+   }
+   return -1;
+}
+
+//+------------------------------------------------------------------+
+//| Custom iHigh (tidak override built-in)                          |
+//+------------------------------------------------------------------+
+double GetBarHigh(string symbol, ENUM_TIMEFRAMES tf, int shift)
+{
+   double high[];
+   ArraySetAsSeries(high, true);
+   if(CopyHigh(symbol, tf, shift, 1, high) > 0)
+      return high[0];
+   return 0;
+}
+
+//+------------------------------------------------------------------+
+//| Custom iLow (tidak override built-in)                           |
+//+------------------------------------------------------------------+
+double GetBarLow(string symbol, ENUM_TIMEFRAMES tf, int shift)
+{
+   double low[];
+   ArraySetAsSeries(low, true);
+   if(CopyLow(symbol, tf, shift, 1, low) > 0)
+      return low[0];
+   return 0;
+}
+
+//+------------------------------------------------------------------+
+//| Custom iClose (tidak override built-in)                         |
+//+------------------------------------------------------------------+
+double GetBarClose(string symbol, ENUM_TIMEFRAMES tf, int shift)
+{
+   double close[];
+   ArraySetAsSeries(close, true);
+   if(CopyClose(symbol, tf, shift, 1, close) > 0)
+      return close[0];
+   return 0;
+}
+
+//+------------------------------------------------------------------+
+//| Pasang pending orders di MULTIPLE LEVELS                        |
+//+------------------------------------------------------------------+
+void PlaceMultipleLevelOrders()
+{
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double volume = CalculateVolume();
+   double slPoints = CalculateSL();
+   
+   //--- Hitung range session
+   double range = sessionHigh - sessionLow;
+   
+   //--- Hitung level-level entry berdasarkan karakteristik dari data
+   double entryLevels[];
+   ArrayResize(entryLevels, EntryLevels * 2); // Untuk buy dan sell
+   
+   //--- Level untuk BUY STOP (di atas harga)
+   if(UseFibonacci)
+   {
+      // Fibonacci levels dari low ke high
+      for(int i = 0; i < EntryLevels; i++)
+      {
+         double fibLevel;
+         switch(i)
+         {
+            case 0: fibLevel = FibLevel1; break;
+            case 1: fibLevel = FibLevel2; break;
+            case 2: fibLevel = FibLevel3; break;
+            case 3: fibLevel = FibLevel4; break;
+            default: fibLevel = 0.5; break;
+         }
+         
+         // Buy stop di atas session high + fib retracement
+         entryLevels[i] = NormalizeDouble(sessionHigh + (range * fibLevel), _Digits);
+      }
+   }
+   else
+   {
+      // Fixed distance levels
+      for(int i = 0; i < EntryLevels; i++)
+      {
+         entryLevels[i] = NormalizeDouble(sessionHigh + (i + 1) * LevelDistance * pointValue, _Digits);
+      }
+   }
+   
+   //--- Level untuk SELL STOP (di bawah harga)
+   if(UseFibonacci)
+   {
+      // Fibonacci levels dari high ke low
+      for(int i = 0; i < EntryLevels; i++)
+      {
+         double fibLevel;
+         switch(i)
+         {
+            case 0: fibLevel = FibLevel1; break;
+            case 1: fibLevel = FibLevel2; break;
+            case 2: fibLevel = FibLevel3; break;
+            case 3: fibLevel = FibLevel4; break;
+            default: fibLevel = 0.5; break;
+         }
+         
+         // Sell stop di bawah session low - fib retracement
+         entryLevels[EntryLevels + i] = NormalizeDouble(sessionLow - (range * fibLevel), _Digits);
+      }
+   }
+   else
+   {
+      // Fixed distance levels
+      for(int i = 0; i < EntryLevels; i++)
+      {
+         entryLevels[EntryLevels + i] = NormalizeDouble(sessionLow - (i + 1) * LevelDistance * pointValue, _Digits);
+      }
+   }
+   
+   //--- Hitung SL dan TP
+   double partialTPPrice = PartialTP * 10 * pointValue; // Konversi pips ke harga
+   double finalTPPrice = FinalTP * 10 * pointValue;
+   
+   //--- Pasang Buy Stop di setiap level
+   for(int i = 0; i < EntryLevels; i++)
+   {
+      double buyStopPrice = entryLevels[i];
+      
+      // Validasi harga
+      if(buyStopPrice <= ask) continue; // Buy stop harus di atas harga
+      
+      // Cek apakah sudah ada pending order di level ini
+      if(PendingOrderExistsAtPrice(ORDER_TYPE_BUY_STOP, buyStopPrice)) continue;
+      
+      // Hitung SL untuk buy
+      double buySL = NormalizeDouble(buyStopPrice - slPoints, _Digits);
+      double buyTP = NormalizeDouble(buyStopPrice + finalTPPrice, _Digits);
+      
+      // Buat request
+      MqlTradeRequest request = {};
+      MqlTradeResult result = {};
+      
+      request.action = TRADE_ACTION_PENDING;
+      request.symbol = _Symbol;
+      request.volume = volume;
+      request.type = ORDER_TYPE_BUY_STOP;
+      request.price = buyStopPrice;
+      request.sl = buySL;
+      request.tp = buyTP;
+      request.deviation = 10;
+      request.magic = MagicNumber;
+      request.comment = "Range Buy Stop L" + IntegerToString(i+1);
+      request.type_filling = ORDER_FILLING_FOK;
+      request.type_time = ORDER_TIME_GTC;
+      
+      ZeroMemory(result);
+      if(OrderSend(request, result))
+      {
+         Print("Buy Stop Level ", i+1, " placed: ", result.order, " at ", buyStopPrice);
+      }
+      else
+      {
+         Print("Buy Stop Level ", i+1, " failed: ", result.retcode);
+      }
+   }
+   
+   //--- Pasang Sell Stop di setiap level (jika diizinkan)
+   if(AllowBothDirections)
+   {
+      for(int i = 0; i < EntryLevels; i++)
+      {
+         double sellStopPrice = entryLevels[EntryLevels + i];
+         
+         // Validasi harga
+         if(sellStopPrice >= bid) continue; // Sell stop harus di bawah harga
+         
+         // Cek apakah sudah ada pending order di level ini
+         if(PendingOrderExistsAtPrice(ORDER_TYPE_SELL_STOP, sellStopPrice)) continue;
+         
+         // Hitung SL untuk sell
+         double sellSL = NormalizeDouble(sellStopPrice + slPoints, _Digits);
+         double sellTP = NormalizeDouble(sellStopPrice - finalTPPrice, _Digits);
+         
+         // Buat request
+         MqlTradeRequest request = {};
+         MqlTradeResult result = {};
+         
+         request.action = TRADE_ACTION_PENDING;
+         request.symbol = _Symbol;
+         request.volume = volume;
+         request.type = ORDER_TYPE_SELL_STOP;
+         request.price = sellStopPrice;
+         request.sl = sellSL;
+         request.tp = sellTP;
+         request.deviation = 10;
+         request.magic = MagicNumber;
+         request.comment = "Range Sell Stop L" + IntegerToString(i+1);
+         request.type_filling = ORDER_FILLING_FOK;
+         request.type_time = ORDER_TIME_GTC;
+         
+         ZeroMemory(result);
+         if(OrderSend(request, result))
+         {
+            Print("Sell Stop Level ", i+1, " placed: ", result.order, " at ", sellStopPrice);
+         }
+         else
+         {
+            Print("Sell Stop Level ", i+1, " failed: ", result.retcode);
+         }
+      }
+   }
+   
+   //--- Tampilkan informasi level
+   Print("--- Multiple Levels Placed ---");
+   for(int i = 0; i < EntryLevels; i++)
+   {
+      Print("Buy Level ", i+1, ": ", entryLevels[i]);
+   }
+   for(int i = 0; i < EntryLevels; i++)
+   {
+      Print("Sell Level ", i+1, ": ", entryLevels[EntryLevels + i]);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Cek apakah pending order sudah ada di harga tertentu            |
+//+------------------------------------------------------------------+
+bool PendingOrderExistsAtPrice(ENUM_ORDER_TYPE type, double price)
+{
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket > 0 && OrderSelect(ticket))
+      {
+         if(OrderGetString(ORDER_SYMBOL) == _Symbol && 
+            OrderGetInteger(ORDER_MAGIC) == MagicNumber &&
+            OrderGetInteger(ORDER_TYPE) == type)
+         {
+            double orderPrice = OrderGetDouble(ORDER_PRICE_OPEN);
+            // Bandingkan dengan toleransi kecil
+            if(MathAbs(orderPrice - price) <= pointValue)
+               return true;
+         }
+      }
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Cek apakah pending order sudah ada (by type)                    |
+//+------------------------------------------------------------------+
+bool PendingOrderExists(ENUM_ORDER_TYPE type)
+{
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket > 0 && OrderSelect(ticket))
+      {
+         if(OrderGetString(ORDER_SYMBOL) == _Symbol && 
+            OrderGetInteger(ORDER_MAGIC) == MagicNumber &&
+            OrderGetInteger(ORDER_TYPE) == type)
+         {
+            return true;
+         }
+      }
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| Hitung volume berdasarkan risk option                           |
 //+------------------------------------------------------------------+
 double CalculateVolume()
@@ -172,18 +565,9 @@ double CalculateVolume()
    if(RiskOption == 1) // Percentage of Equity
    {
       double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-      double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-      double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       
-      // Rumus sederhana: Volume = (Equity * Percent/100) / (SL * TickValue/TickSize)
-      // Ini perlu disesuaikan dengan risk management yang diinginkan
-      double riskAmount = equity * (PercentEquity / 100.0);
-      double slPoints = CalculateSL() / pointValue;
-      double pointValuePerLot = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / 
-                                SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE) * pointValue;
-      
-      if(slPoints > 0 && pointValuePerLot > 0)
-         volume = riskAmount / (slPoints * pointValuePerLot);
+      // Untuk MQL5, perhitungan sederhana: Volume = (Equity * Percent/100) / 1000 (asumsi)
+      volume = equity * (PercentEquity / 100.0) / 1000.0;
       
       // Batasi volume minimum dan maksimum
       double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
@@ -231,117 +615,6 @@ double CalculateSL()
 }
 
 //+------------------------------------------------------------------+
-//| Pasang pending orders                                           |
-//+------------------------------------------------------------------+
-void PlacePendingOrders()
-{
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double volume = CalculateVolume();
-   double slPoints = CalculateSL();
-   
-   //--- Hitung harga pending order
-   double buyStopPrice = NormalizeDouble(ask + OrderPadding * pointValue, _Digits);
-   double sellStopPrice = NormalizeDouble(bid - OrderPadding * pointValue, _Digits);
-   
-   //--- Hitung SL dan TP
-   double buySL = NormalizeDouble(buyStopPrice - slPoints, _Digits);
-   double sellSL = NormalizeDouble(sellStopPrice + slPoints, _Digits);
-   
-   double partialTPPrice = PartialTP * 10 * pointValue; // Konversi pips ke harga
-   double finalTPPrice = FinalTP * 10 * pointValue;
-   
-   double buyPartialTP = NormalizeDouble(buyStopPrice + partialTPPrice, _Digits);
-   double buyFinalTP = NormalizeDouble(buyStopPrice + finalTPPrice, _Digits);
-   
-   double sellPartialTP = NormalizeDouble(sellStopPrice - partialTPPrice, _Digits);
-   double sellFinalTP = NormalizeDouble(sellStopPrice - finalTPPrice, _Digits);
-   
-   //--- Cek apakah sudah ada pending order
-   bool buyExists = PendingOrderExists(ORDER_TYPE_BUY_STOP);
-   bool sellExists = PendingOrderExists(ORDER_TYPE_SELL_STOP);
-   
-   //--- Buat request structure
-   MqlTradeRequest request = {};
-   MqlTradeResult result = {};
-   
-   //--- Pasang Buy Stop (jika belum ada)
-   if(!buyExists && volume > 0)
-   {
-      request.action = TRADE_ACTION_PENDING;
-      request.symbol = _Symbol;
-      request.volume = volume;
-      request.type = ORDER_TYPE_BUY_STOP;
-      request.price = buyStopPrice;
-      request.sl = buySL;
-      request.tp = buyFinalTP; // TP awal adalah Final TP, nanti dimodifikasi saat partial
-      request.deviation = 10;
-      request.magic = MagicNumber;
-      request.comment = "Range Buy Stop";
-      request.type_filling = ORDER_FILLING_FOK;
-      request.type_time = ORDER_TIME_GTC;
-      
-      ZeroMemory(result);
-      if(OrderSend(request, result))
-      {
-         Print("Buy Stop placed: ", result.order, " at ", buyStopPrice);
-      }
-      else
-      {
-         Print("Buy Stop failed: ", result.retcode, " ", result.comment);
-      }
-   }
-   
-   //--- Pasang Sell Stop (jika belum ada dan AllowBothDirections = true)
-   if(AllowBothDirections && !sellExists && volume > 0)
-   {
-      request.action = TRADE_ACTION_PENDING;
-      request.symbol = _Symbol;
-      request.volume = volume;
-      request.type = ORDER_TYPE_SELL_STOP;
-      request.price = sellStopPrice;
-      request.sl = sellSL;
-      request.tp = sellFinalTP;
-      request.deviation = 10;
-      request.magic = MagicNumber;
-      request.comment = "Range Sell Stop";
-      request.type_filling = ORDER_FILLING_FOK;
-      request.type_time = ORDER_TIME_GTC;
-      
-      ZeroMemory(result);
-      if(OrderSend(request, result))
-      {
-         Print("Sell Stop placed: ", result.order, " at ", sellStopPrice);
-      }
-      else
-      {
-         Print("Sell Stop failed: ", result.retcode, " ", result.comment);
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Cek apakah pending order sudah ada                              |
-//+------------------------------------------------------------------+
-bool PendingOrderExists(ENUM_ORDER_TYPE type)
-{
-   for(int i = OrdersTotal() - 1; i >= 0; i--)
-   {
-      ulong ticket = OrderGetTicket(i);
-      if(ticket > 0 && OrderSelect(ticket))
-      {
-         if(OrderGetString(ORDER_SYMBOL) == _Symbol && 
-            OrderGetInteger(ORDER_MAGIC) == MagicNumber &&
-            OrderGetInteger(ORDER_TYPE) == type)
-         {
-            return true;
-         }
-      }
-   }
-   return false;
-}
-
-//+------------------------------------------------------------------+
 //| Cek posisi terbuka untuk partial TP                             |
 //+------------------------------------------------------------------+
 void CheckPartialTP()
@@ -377,12 +650,6 @@ void CheckPartialTP()
                if(closeVolume > 0)
                {
                   ClosePartialPosition(ticket, closeVolume);
-                  
-                  // Modifikasi sisa posisi untuk trailing (jika diaktifkan)
-                  if(UseTrailing)
-                  {
-                     ModifyPositionForTrailing(ticket);
-                  }
                }
             }
          }
@@ -428,15 +695,6 @@ void ClosePartialPosition(ulong ticket, double volume)
          Print("Partial close failed: ", result.retcode);
       }
    }
-}
-
-//+------------------------------------------------------------------+
-//| Modifikasi posisi untuk trailing                                |
-//+------------------------------------------------------------------+
-void ModifyPositionForTrailing(ulong ticket)
-{
-   // Implementasi modifikasi SL untuk trailing
-   // Akan dipanggil setelah partial close
 }
 
 //+------------------------------------------------------------------+
@@ -523,17 +781,26 @@ void CheckCloseByHour()
       MqlDateTime dt;
       TimeToStruct(currentTime, dt);
       
-      //--- Close trades pada jam tertentu
-      if(CloseTradesHour > 0 && dt.hour == CloseTradesHour && dt.min == 0)
+      static int lastCloseTradeHour = -1;
+      static int lastCloseOrderHour = -1;
+      
+      //--- Close trades pada jam tertentu (hanya sekali per jam)
+      if(CloseTradesHour > 0 && dt.hour == CloseTradesHour && dt.min < 5 && lastCloseTradeHour != dt.hour)
       {
          CloseAllPositions();
+         lastCloseTradeHour = dt.hour;
       }
       
-      //--- Close orders pada jam tertentu
-      if(CloseOrdersHour > 0 && dt.hour == CloseOrdersHour && dt.min == 0)
+      //--- Close orders pada jam tertentu (hanya sekali per jam)
+      if(CloseOrdersHour > 0 && dt.hour == CloseOrdersHour && dt.min < 5 && lastCloseOrderHour != dt.hour)
       {
          DeleteAllPendingOrders();
+         lastCloseOrderHour = dt.hour;
       }
+      
+      // Reset counter jika jam berubah
+      if(dt.hour != lastCloseTradeHour) lastCloseTradeHour = -1;
+      if(dt.hour != lastCloseOrderHour) lastCloseOrderHour = -1;
    }
 }
 
@@ -572,7 +839,10 @@ void CloseAllPositions()
             }
             
             ZeroMemory(result);
-            OrderSend(request, result);
+            if(!OrderSend(request, result))
+            {
+               Print("Close position failed: ", result.retcode);
+            }
          }
       }
    }
@@ -598,7 +868,10 @@ void DeleteAllPendingOrders()
             request.order = ticket;
             
             ZeroMemory(result);
-            OrderSend(request, result);
+            if(!OrderSend(request, result))
+            {
+               Print("Delete order failed: ", result.retcode);
+            }
          }
       }
    }

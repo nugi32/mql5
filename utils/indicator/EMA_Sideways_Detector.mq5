@@ -10,9 +10,9 @@
 #property indicator_color1  clrYellow
 #property indicator_width1  2
 
-//---- input
-input int      EMA_Period = 50;
-input double   Sideways_Buffer = 10;   // dalam points
+//---- input (default for M1 XAU)
+input int      EMA_Period = 34;
+input double   Sideways_Buffer = 89;
 input int      Dot_Code = 159;
 
 //---- buffers
@@ -55,7 +55,6 @@ int OnCalculate(const int rates_total,
    if(rates_total <= EMA_Period)
       return(0);
 
-   // Copy EMA data
    if(CopyBuffer(emaHandle, 0, 0, rates_total, EMABuffer) <= 0)
       return(0);
 
@@ -69,7 +68,6 @@ int OnCalculate(const int rates_total,
       {
          double ema_diff = MathAbs(EMABuffer[i] - EMABuffer[i-1]);
 
-         // convert buffer dari points ke harga
          double buffer_price = Sideways_Buffer * _Point;
 
          if(ema_diff <= buffer_price)

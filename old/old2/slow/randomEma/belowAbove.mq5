@@ -84,7 +84,6 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-
 bool IsSideways()
 {
    double diff=MathAbs(emaSideways[1]-emaSideways[2]);
@@ -95,7 +94,6 @@ bool IsSideways()
 //+------------------------------------------------------------------+
 void CheckForEntry()
 {
-
    if(HasOpenPosition()) return;
    if(IsSideways()) return;
 
@@ -117,7 +115,6 @@ void CheckForEntry()
 }
 
 //+------------------------------------------------------------------+
-
 void SendOrder(ENUM_ORDER_TYPE type,double price)
 {
    MqlTradeRequest req;
@@ -140,7 +137,6 @@ void SendOrder(ENUM_ORDER_TYPE type,double price)
 }
 
 //+------------------------------------------------------------------+
-
 bool IsNewBar()
 {
 
@@ -155,7 +151,6 @@ bool IsNewBar()
 }
 
 //+------------------------------------------------------------------+
-
 bool HasOpenPosition()
 {
 
@@ -180,7 +175,6 @@ bool HasOpenPosition()
 }
 
 //+------------------------------------------------------------------+
-
 void OpenBuy()
 {
 
@@ -191,7 +185,6 @@ void OpenBuy()
 }
 
 //+------------------------------------------------------------------+
-
 void OpenSell()
 {
 
