@@ -18,6 +18,7 @@ input double SAR_Max  = 0.2;
 
 //================ SIDEWAYS =================
 input int period = 34;
+input double Sideways_Buffer = 89;
 
 //================ RISK =================
 input double lotSize = 0.01;
@@ -92,76 +93,72 @@ bool IsNewBar()
 //+------------------------------------------------------------------+
 bool isSideways(int length)
 {
-   double atr = atrBuffer[0];
-   double slope = sidewaysBuffer[0] - sidewaysBuffer[length-1];
-
-   int flatCount = 0;
-   int directionChanges = 0;
-
    for(int i = 0; i < length - 1; i++)
    {
       double diff = MathAbs(sidewaysBuffer[i] - sidewaysBuffer[i+1]);
+      double buffer_price = Sideways_Buffer * _Point;
 
-      if(diff <= atr * 0.1)
-         flatCount++;
-
-      if(i < length - 2)
-      {
-         double d1 = sidewaysBuffer[i] - sidewaysBuffer[i+1];
-         double d2 = sidewaysBuffer[i+1] - sidewaysBuffer[i+2];
-
-         if(d1 * d2 < 0)
-            directionChanges++;
-      }
+      if(diff > buffer_price) {
+         return false;
+         }
+         else if (diff <= buffer_price) {
+            return true;
+         }
    }
-
-   bool flat = flatCount >= (length * 0.8);
-   bool choppy = directionChanges > length / 3;
-   bool lowSlope = MathAbs(slope) < (atr * 0.2);
-
-   return flat && choppy && lowSlope;
+   return false;
 }
 //+------------------------------------------------------------------+
 void CheckForEntry()
 {
    double atr = atrBuffer[0];
 
-   double slope = sidewaysBuffer[0] - sidewaysBuffer[10];
-   if(MathAbs(slope) < atr * 0.2)
-      return;
-
    double fast = fastEma[1];
    double slow = slowEma[1];
-
-   bool uptrend   = fast > slow;
-   bool downtrend = fast < slow;
-
-   double trendStrength = MathAbs(fast - slow);
-   if(trendStrength < atr * 0.3)
-      return;
 
    double close1 = rates[1].close;
    double open1  = rates[1].open;
    double high1  = rates[1].high;
    double low1   = rates[1].low;
 
+    double slope = sidewaysBuffer[0] - sidewaysBuffer[20];
+    if(MathAbs(slope) < atr * 0.15)
+      return;
+
+   double trendStrength = MathAbs(fast - slow);
+   if(trendStrength < atr * 0.5)
+      return;
+
    double distance = MathAbs(close1 - fast);
    if(distance > atr * 0.5)
       return;
 
+   bool uptrend   = fast > slow;
+   bool downtrend = fast < slow;
+      
+   //signal
+
    bool bullishReject = (close1 > open1) && (low1 < fast);
    bool bearishReject = (close1 < open1) && (high1 > fast);
 
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   bool bullRejectInSlowEma = (low1 < slow) && (close1 > slow);
+    bool bearRejectInSlowEma = (high1 > slow) && (close1 < slow);
 
-bool touchBuy  = (rates[1].low <= fast);
-bool touchSell = (rates[1].high >= fast);
+    bool bullRejectInFastEma = (low1 < fast) && (close1 > fast);
+    bool bearRejectInFastEma = (high1 > fast) && (close1 < fast);
 
-   if(uptrend && touchBuy)
+    bool touchBuy  = (low1 <= fast);
+    bool touchSell = (high1 >= fast);
+
+    bool bullCross = (fastEma[2] < slowEma[2]) && (fastEma[1] > slowEma[1]);
+    bool bearCross = (fastEma[2] > slowEma[2]) && (fastEma[1] < slowEma[1]);
+
+    bool priceCrossBuy = (close1 > slow) && (rates[2].close < slow);
+    bool priceCrossSell = (close1 < slow) && (rates[2].close > slow);
+
+   if(uptrend && priceCrossBuy)
       OpenBuy(atr);
 
-   if(downtrend && touchSell)
+   if(downtrend && priceCrossSell)
       OpenSell(atr);
 }
 //+------------------------------------------------------------------+
