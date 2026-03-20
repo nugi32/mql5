@@ -195,10 +195,6 @@ void CheckForEntry()
    bool touchBuy  = (low1 <= fast);
    bool touchSell = (high1 >= fast);
 
-   // --- EMA crossover detection ---
-   bool bullCross = (fastEma[2] < slowEma[2]) && (fastEma[1] > slowEma[1]);
-   bool bearCross = (fastEma[2] > slowEma[2]) && (fastEma[1] < slowEma[1]);
-
    // --- Price crossing slow EMA ---
    bool priceCrossBuy  = (close1 > slow) && (rates[2].close < slow);
    bool priceCrossSell = (close1 < slow) && (rates[2].close > slow);
