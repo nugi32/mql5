@@ -1,327 +1,308 @@
 //+------------------------------------------------------------------+
-//|           EMA Crossover EA + Sideways Filter + SAR Trailing     |
+//| EMA Crossover EA + Sideways + ATR SL + SAR Trailing              |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.30"
+#property version   "1.50"
 
-input string Inp_Expert_Title="Expert_EMA_Crossover";
-int Expert_MagicNumber=14598;
+input string Inp_Expert_Title = "Expert_EMA_Crossover";
+int Expert_MagicNumber = 14598;
 
-//================ EMA SETTINGS =================
-input group "=== Fast EMA Settings ==="
+//================ EMA =================
 input int FastEMA_Period = 13;
-input int FastEMA_Shift  = 0;
+input int SlowEMA_Period = 34;
+input int MidEMA_Period = 21;
 
-input group "=== Slow EMA Settings ==="
-input int SlowEMA_Period = 21;
-input int SlowEMA_Shift  = 0;
-
-input group "=== SAR Trailing Settings ==="
-input bool UseSAR_Trailing = true;
+//================ SAR =================
+input bool   UseSAR_Trailing = true;
 input double SAR_Step = 0.02;
 input double SAR_Max  = 0.2;
 
-//================ SIDEWAYS FILTER =================
-input group "=== Sideways Detector Settings ==="
-input int period = 34;
-input double rangeBuffer = 100.0;
+//================ SIDEWAYS =================
+input int    period = 34;
+input double Sideways_Buffer = 144;
 
-//================ TRADING =================
-input group "=== Trading Settings ==="
+//================ RISK =================
 input double lotSize = 0.01;
 
+
 //================ GLOBAL =================
-int fastEmaHandle;
-int slowEmaHandle;
-int sidewaysHandle;
-int sarHandle;
-int atrHandle;
+int fastEmaHandle, slowEmaHandle, sidewaysHandle;
+int sarHandle, atrHandle;
 
 double atrBuffer[];
-double fastEma[];
-double slowEma[];
-double sidewaysBuffer[];
-
+double fastEma[], slowEma[], sidewaysBuffer[];
 MqlRates rates[];
 
-datetime lastBarTime=0;
+int midEmaHandle;
+double midEma[];
 
+datetime lastBarTime = 0;
+
+//+------------------------------------------------------------------+
+//| Initialization                                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   fastEmaHandle  = iMA(_Symbol, _Period, FastEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
+   slowEmaHandle  = iMA(_Symbol, _Period, SlowEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
+   sidewaysHandle = iMA(_Symbol, _Period, period, 0, MODE_EMA, PRICE_CLOSE);
+   midEmaHandle = iMA(_Symbol, _Period, MidEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
 
-   fastEmaHandle=iMA(_Symbol,_Period,FastEMA_Period,FastEMA_Shift,MODE_EMA,PRICE_CLOSE);
-   slowEmaHandle=iMA(_Symbol,_Period,SlowEMA_Period,SlowEMA_Shift,MODE_EMA,PRICE_CLOSE);
+   sarHandle = iSAR(_Symbol, _Period, SAR_Step, SAR_Max);
+   atrHandle = iATR(_Symbol, _Period, 14);
 
-   sidewaysHandle=iMA(_Symbol,_Period,period,0,MODE_EMA,PRICE_CLOSE);
-
-   sarHandle = iSAR(_Symbol,_Period,SAR_Step,SAR_Max);
-   atrHandle = iATR(_Symbol,_Period,14);
-
-   if(fastEmaHandle==INVALID_HANDLE ||
-      slowEmaHandle==INVALID_HANDLE ||
-      sidewaysHandle==INVALID_HANDLE ||
-      sarHandle==INVALID_HANDLE ||
-      atrHandle==INVALID_HANDLE)
+   // Validate all indicator handles
+   if(fastEmaHandle == INVALID_HANDLE ||
+      slowEmaHandle == INVALID_HANDLE ||
+      sidewaysHandle == INVALID_HANDLE ||
+      sarHandle == INVALID_HANDLE ||
+      atrHandle == INVALID_HANDLE ||
+      midEmaHandle == INVALID_HANDLE)
       return INIT_FAILED;
 
-   ArraySetAsSeries(fastEma,true);
-   ArraySetAsSeries(slowEma,true);
-   ArraySetAsSeries(rates,true);
-   ArraySetAsSeries(sidewaysBuffer,true);
-   ArraySetAsSeries(atrBuffer,true);
+   // Set arrays as series (latest index = 0)
+   ArraySetAsSeries(fastEma, true);
+   ArraySetAsSeries(slowEma, true);
+   ArraySetAsSeries(sidewaysBuffer, true);
+   ArraySetAsSeries(atrBuffer, true);
+   ArraySetAsSeries(rates, true);
+   ArraySetAsSeries(midEma, true);
 
    return INIT_SUCCEEDED;
 }
+
 //+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-
-   IndicatorRelease(fastEmaHandle);
-   IndicatorRelease(slowEmaHandle);
-   IndicatorRelease(sidewaysHandle);
-   IndicatorRelease(sarHandle);
-    IndicatorRelease(atrHandle);
-
-}
+//| Main Tick                                                        |
 //+------------------------------------------------------------------+
 void OnTick()
 {
-    if(!IsNewBar()) return;
+   // Execute logic only on new bar
+   if(!IsNewBar())
+      return;
 
-    if(CopyBuffer(fastEmaHandle,0,0,3,fastEma)<3) return;
-    if(CopyBuffer(slowEmaHandle,0,0,3,slowEma)<3) return;
-    if(CopyBuffer(sidewaysHandle,0,0,period,sidewaysBuffer)<period) return;
-    if(CopyBuffer(atrHandle,0,0,1,atrBuffer)<1) return;
-    if(CopyRates(_Symbol,_Period,0,3,rates)<3) return;
+   // Copy indicator buffers
+   if(CopyBuffer(fastEmaHandle, 0, 0, 3, fastEma) < 3) return;
+   if(CopyBuffer(slowEmaHandle, 0, 0, 3, slowEma) < 3) return;
+   if(CopyBuffer(sidewaysHandle, 0, 0, period, sidewaysBuffer) < period) return;
+   if(CopyBuffer(atrHandle, 0, 0, period, atrBuffer) < period) return;
+   if(CopyRates(_Symbol, _Period, 0, 3, rates) < 3) return;
+   if(CopyBuffer(midEmaHandle, 0, 0, 3, midEma) < 3) return;
 
-    bool sideways = isSideways(period);
+   // Entry logic if market is not sideways
+   if(!isSideways(period))
+      CheckForEntry();
 
-    if(!sideways)
-    CheckForEntry();
-
-    if(UseSAR_Trailing)
-    {
-    double newSL=0;
-    TrailingParabolicSAR(_Symbol,newSL);
-    }
+   // Apply SAR trailing stop
+   if(IsSARPositiveAgainstEntry())
+   {
+      double newSL = 0;
+      TrailingParabolicSAR(_Symbol, newSL);
+   }
 }
+
+//+------------------------------------------------------------------+
+//| Detect New Bar                                                   |
 //+------------------------------------------------------------------+
 bool IsNewBar()
 {
+   datetime current = iTime(_Symbol, _Period, 0);
 
-   datetime current=iTime(_Symbol,_Period,0);
-
-   if(current==lastBarTime)
+   if(current == lastBarTime)
       return false;
 
-   lastBarTime=current;
+   lastBarTime = current;
    return true;
-
 }
 
 //+------------------------------------------------------------------+
-bool isSideways(int length) {
-    double atr = atrBuffer[0];
-    double buffer_price = atr * 0.1;
-
-    int flatCount = 0;
-    int directionChanges = 0;
-
-    for(int i = 0; i < length - 1; i++) {
-        double diff = MathAbs(sidewaysBuffer[i] - sidewaysBuffer[i+1]);
-
-        if(diff <= buffer_price)
-            flatCount++;
-
-        if(i < length - 2) {
-            double diff1 = sidewaysBuffer[i] - sidewaysBuffer[i+1];
-            double diff2 = sidewaysBuffer[i+1] - sidewaysBuffer[i+2];
-
-            if(diff1 * diff2 < 0)
-                directionChanges++;
-        }
-    }
-
-    double slope = sidewaysBuffer[0] - sidewaysBuffer[length-1];
-
-    bool flat = flatCount >= (length * 0.8);
-    bool choppy = directionChanges > length / 3;
-    bool lowSlope = MathAbs(slope) < (atr * 0.2);
-
-    return flat && choppy && lowSlope;
-}
-
+//| Sideways Market Detection                                        |
 //+------------------------------------------------------------------+
-void CheckForEntry()
+bool isSideways(int length)
 {
-   //================ BASIC FILTER =================
-   double atr = atrBuffer[0];
+   if(length < 2)
+      return false;
 
-   // slope lebih panjang (lebih stabil)
-   double slope = sidewaysBuffer[0] - sidewaysBuffer[10];
-   if(MathAbs(slope) < atr * 0.2)
-      return;
-
-   //================ TREND DETECTION =================
-   double fast = fastEma[1];
-   double slow = slowEma[1];
-
-   bool uptrend   = fast > slow;
-   bool downtrend = fast < slow;
-
-   // trend strength (hindari trend lemah)
-   double trendStrength = MathAbs(fast - slow);
-   if(trendStrength < atr * 0.3)
-      return;
-
-   //================ PRICE DATA =================
-   double close1 = rates[1].close;
-   double open1  = rates[1].open;
-   double high1  = rates[1].high;
-   double low1   = rates[1].low;
-
-   //================ PULLBACK DETECTION =================
-   double distance = MathAbs(close1 - fast);
-
-   bool nearEMA = distance < atr * 0.5;
-
-   if(!nearEMA)
-      return;
-
-   //================ REJECTION CANDLE =================
-   bool bullishReject = (close1 > open1) && (low1 < fast);
-   bool bearishReject = (close1 < open1) && (high1 > fast);
-
-   //================ FINAL ENTRY =================
-   if(uptrend && bullishReject)
+   for(int i = 1; i < length - 1; i++)
    {
-      Print("BUY: Trend + Pullback + Rejection");
-      OpenBuy();
-      return;
-   }
+      double diff = MathAbs(sidewaysBuffer[i] - sidewaysBuffer[i + 1]);
+      double buffer_price = Sideways_Buffer * _Point;
 
-   if(downtrend && bearishReject)
-   {
-      Print("SELL: Trend + Pullback + Rejection");
-      OpenSell();
-      return;
-   }
-}
-//+------------------------------------------------------------------+
-bool HasOpenPosition()
-{
+      bool atr_down = atrBuffer[i] < atrBuffer[i - 1];
 
-   for(int i=0;i<PositionsTotal();i++)
-   {
-      ulong ticket=PositionGetTicket(i);
+      if(diff > buffer_price)
+         return false;
 
-      if(PositionSelectByTicket(ticket))
-      {
-         if(PositionGetInteger(POSITION_MAGIC)==Expert_MagicNumber &&
-            PositionGetString(POSITION_SYMBOL)==_Symbol)
-            return true;
-      }
+      if(diff <= buffer_price && atr_down)
+         return true;
    }
 
    return false;
-
 }
+
 //+------------------------------------------------------------------+
-void OpenBuy()
-{
-   double entry=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-
-   SendOrder(ORDER_TYPE_BUY,entry);
-
-}
+//| Entry Logic                                                      |
 //+------------------------------------------------------------------+
-void OpenSell()
+void CheckForEntry()
 {
+   // ATR value for volatility filtering
+   double atr = atrBuffer[0];
 
-   double entry=SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   // --- Sideways filter using slope ---
+   double slope = sidewaysBuffer[0] - sidewaysBuffer[20];
 
-   SendOrder(ORDER_TYPE_SELL,entry);
+   if(MathAbs(slope) < atr * 0.15)
+      return;
 
+double fast_prev2 = fastEma[2];
+double mid_prev2  = midEma[2];
+double slow_prev2 = slowEma[2];
+
+double fast_prev1 = fastEma[1];
+double mid_prev1  = midEma[1];
+double slow_prev1 = slowEma[1];
+
+//=========================
+// TRIPLE EMA CROSS LOGIC
+//=========================
+
+// BUY: fast > mid > slow (dan sebelumnya belum urut)
+bool crossUp =
+   (fast_prev2 <= mid_prev2 || mid_prev2 <= slow_prev2) &&
+   (fast_prev1 > mid_prev1 && mid_prev1 > slow_prev1);
+
+// SELL: fast < mid < slow
+bool crossDown =
+   (fast_prev2 >= mid_prev2 || mid_prev2 >= slow_prev2) &&
+   (fast_prev1 < mid_prev1 && mid_prev1 < slow_prev1);
+
+   // --- Entry execution ---
+   if(crossUp)
+      OpenBuy(atr);
+
+   if(crossDown)
+      OpenSell(atr);
 }
+
 //+------------------------------------------------------------------+
-void SendOrder(ENUM_ORDER_TYPE type,double price)
+//| Check Existing Positions                                         |
+//+------------------------------------------------------------------+
+bool HasOpenPosition()
 {
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
 
-   if(HasOpenPosition()) return;
-
-   MqlTradeRequest req;
-   MqlTradeResult res;
-
-   ZeroMemory(req);
-   ZeroMemory(res);
-
-   req.action=TRADE_ACTION_DEAL;
-   req.symbol=_Symbol;
-   req.volume=lotSize;
-   req.type=type;
-   req.price=price;
-   req.magic=Expert_MagicNumber;
-   req.deviation=10;
-   req.comment=Inp_Expert_Title;
-
-   OrderSend(req,res);
-
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == Expert_MagicNumber &&
+            PositionGetString(POSITION_SYMBOL) == _Symbol)
+            return true;
+      }
+   }
+   return false;
 }
 
+//+------------------------------------------------------------------+
+//| Open Buy                                                         |
+//+------------------------------------------------------------------+
+void OpenBuy(double sl)
+{
+   if(HasOpenPosition())
+      return;
+
+   double entry = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double stopLoss = entry - sl * 1.5;
+
+   SendOrder(ORDER_TYPE_BUY, entry, stopLoss);
+}
+
+//+------------------------------------------------------------------+
+//| Open Sell                                                        |
+//+------------------------------------------------------------------+
+void OpenSell(double sl)
+{
+   if(HasOpenPosition())
+      return;
+
+   double entry = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double stopLoss = entry + sl * 1.5;
+   SendOrder(ORDER_TYPE_SELL, entry, stopLoss);
+}
+
+//+------------------------------------------------------------------+
+//| Send Order                                                       |
+//+------------------------------------------------------------------+
+void SendOrder(ENUM_ORDER_TYPE type, double price, double stopLoss)
+{
+   MqlTradeRequest req = {};
+   MqlTradeResult  res = {};
+
+   req.action    = TRADE_ACTION_DEAL;
+   req.symbol    = _Symbol;
+   req.volume    = lotSize;
+   req.type      = type;
+   req.price     = price;
+   req.magic     = Expert_MagicNumber;
+   req.deviation = 10;
+   req.sl = stopLoss;
+   req.comment   = Inp_Expert_Title;
+
+   OrderSend(req, res);
+}
+
+//+------------------------------------------------------------------+
+//| Parabolic SAR Trailing                                           |
 //+------------------------------------------------------------------+
 bool TrailingParabolicSAR(string symbol, double &newSL)
 {
-   if(PositionsTotal()==0)
+   if(PositionsTotal() == 0)
       return false;
 
-   double sarBuffer[];
-   ArraySetAsSeries(sarBuffer,true);
+   double sar[];
+   ArraySetAsSeries(sar, true);
 
-   if(CopyBuffer(sarHandle,0,1,1,sarBuffer)<1)
+   if(CopyBuffer(sarHandle, 0, 1, 1, sar) < 1)
       return false;
 
-   double sarValue = sarBuffer[0];
+   double sarValue = sar[0];
 
-   for(int i=0;i<PositionsTotal();i++)
+   for(int i = 0; i < PositionsTotal(); i++)
    {
       ulong ticket = PositionGetTicket(i);
 
       if(!PositionSelectByTicket(ticket))
          continue;
 
-      if(PositionGetInteger(POSITION_MAGIC)!=Expert_MagicNumber)
+      if(PositionGetInteger(POSITION_MAGIC) != Expert_MagicNumber)
          continue;
 
-      if(PositionGetString(POSITION_SYMBOL)!=symbol)
+      if(PositionGetString(POSITION_SYMBOL) != symbol)
          continue;
 
-      long type = PositionGetInteger(POSITION_TYPE);
+      long type       = PositionGetInteger(POSITION_TYPE);
       double currentSL = PositionGetDouble(POSITION_SL);
-      double tp = PositionGetDouble(POSITION_TP);
+      double tp        = PositionGetDouble(POSITION_TP);
 
-      double bid = SymbolInfoDouble(symbol,SYMBOL_BID);
-      double ask = SymbolInfoDouble(symbol,SYMBOL_ASK);
+      double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+      double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
 
-      if(type==POSITION_TYPE_BUY)
+      if(type == POSITION_TYPE_BUY)
       {
          if(sarValue > currentSL && sarValue < bid)
-         {
             newSL = sarValue;
-         }
-         else continue;
+         else
+            continue;
       }
-      else if(type==POSITION_TYPE_SELL)
+      else
       {
-         if((currentSL==0 || sarValue < currentSL) && sarValue > ask)
-         {
+         if((currentSL == 0 || sarValue < currentSL) && sarValue > ask)
             newSL = sarValue;
-         }
-         else continue;
+         else
+            continue;
       }
 
-      MqlTradeRequest req={};
-      MqlTradeResult  res={};
+      MqlTradeRequest req = {};
+      MqlTradeResult  res = {};
 
       req.action   = TRADE_ACTION_SLTP;
       req.position = ticket;
@@ -329,15 +310,145 @@ bool TrailingParabolicSAR(string symbol, double &newSL)
       req.sl       = newSL;
       req.tp       = tp;
 
-      if(OrderSend(req,res))
+      OrderSend(req, res);
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| SAR Position Validation                                          |
+//+------------------------------------------------------------------+
+bool IsSARPositiveAgainstEntry()
+{
+   if(PositionsTotal() == 0)
+      return false;
+
+   double sar[];
+   ArraySetAsSeries(sar, true);
+
+   if(CopyBuffer(sarHandle, 0, 1, 1, sar) < 1)
+      return false;
+
+   double sarValue = sar[0];
+
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      if(PositionGetInteger(POSITION_MAGIC) != Expert_MagicNumber)
+         continue;
+
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+
+      long type   = PositionGetInteger(POSITION_TYPE);
+      double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+
+      if(type == POSITION_TYPE_BUY)
       {
-         if(res.retcode==TRADE_RETCODE_DONE)
-         {
-            Print("Trailing updated to: ",newSL);
+         if(sarValue > entry)
             return true;
-         }
+      }
+      else if(type == POSITION_TYPE_SELL)
+      {
+         if(sarValue < entry)
+            return true;
       }
    }
 
    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Deinitialization                                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   // Release EMA
+   if(fastEmaHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(fastEmaHandle);
+      fastEmaHandle = INVALID_HANDLE;
+   }
+
+   if(slowEmaHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(slowEmaHandle);
+      slowEmaHandle = INVALID_HANDLE;
+   }
+
+   if(sidewaysHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(sidewaysHandle);
+      sidewaysHandle = INVALID_HANDLE;
+   }
+
+   // Release SAR
+   if(sarHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(sarHandle);
+      sarHandle = INVALID_HANDLE;
+   }
+
+   // Release ATR
+   if(atrHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(atrHandle);
+      atrHandle = INVALID_HANDLE;
+   }
+
+   // Optional: clear arrays (tidak wajib, tapi bersih)
+   ArrayFree(fastEma);
+   ArrayFree(slowEma);
+   ArrayFree(sidewaysBuffer);
+   ArrayFree(atrBuffer);
+   ArrayFree(rates);
+
+   Print("EA Deinitialized. Reason: ", reason);
+}
+
+//+------------------------------------------------------------------+
+//| Custom Optimization Score                                        |
+//+------------------------------------------------------------------+
+double OnTester()
+{
+   double profit     = TesterStatistics(STAT_PROFIT);
+   double drawdown   = TesterStatistics(STAT_EQUITY_DD);
+   double trades     = TesterStatistics(STAT_TRADES);
+   double win_trades = TesterStatistics(STAT_PROFIT_TRADES);
+
+   // Avoid low sample size bias
+   if(trades < 10)
+      return 0;
+
+   // Recovery factor
+   double recovery = 0;
+   if(drawdown > 0)
+      recovery = profit / drawdown;
+
+   // Win rate
+   double winrate = win_trades / trades;
+
+   // Expected payoff
+   double payoff = TesterStatistics(STAT_EXPECTED_PAYOFF);
+
+   // Profit factor
+   double pf = TesterStatistics(STAT_PROFIT_FACTOR);
+
+   // Safety normalization
+   if(recovery < 0) recovery = 0;
+   if(pf > 10) pf = 10;
+
+   // Final scoring formula
+   double score =
+      (recovery * 0.4) +
+      (winrate  * 0.3) +
+      (pf       * 0.2) +
+      (payoff   * 0.1);
+
+   return score;
 }

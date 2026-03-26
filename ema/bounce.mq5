@@ -23,20 +23,6 @@ input double Sideways_Buffer = 144;
 //================ RISK =================
 input double lotSize = 0.01;
 
-/*
-// Optional filters (currently disabled)
-input bool UseTrendFilter        = true;
-input bool UseSlopeFilter        = true;
-input bool UseStrengthFilter     = true;
-input bool UseDistanceFilter     = true;
-
-input bool UsePriceCross         = true;
-input bool UseEMACross           = false;
-input bool UseRejectCandle       = false;
-input bool UseRejectSlow         = false;
-input bool UseRejectFast         = false;
-input bool UseTouch              = false;
-*/
 
 //================ GLOBAL =================
 int fastEmaHandle, slowEmaHandle, sidewaysHandle;
@@ -97,10 +83,16 @@ void OnTick()
    // Entry logic if market is not sideways
    if(!isSideways(period))
       CheckForEntry();
-
+/*
    // Apply SAR trailing stop
-   double newSL = 0;
-   TrailingParabolicSAR(_Symbol, newSL);
+   if(IsSARPositiveAgainstEntry())
+   {
+      double newSL = 0;
+      TrailingParabolicSAR(_Symbol, newSL);
+   }*/
+
+         double newSL = 0;
+      TrailingParabolicSAR(_Symbol, newSL);
 }
 
 //+------------------------------------------------------------------+
@@ -145,20 +137,29 @@ bool isSideways(int length)
 //+------------------------------------------------------------------+
 //| Entry Logic                                                      |
 //+------------------------------------------------------------------+
+void checkReverseCross() {
+    double fast_prev2 = fastEma[2];
+double slow_prev2 = slowEma[2];
+
+double fast_prev1 = fastEma[1];
+double slow_prev1 = slowEma[1];
+
+//--- crossover conditions
+bool crossUp   = (fast_prev2 <= slow_prev2 && fast_prev1 > slow_prev1);
+bool crossDown = (fast_prev2 >= slow_prev2 && fast_prev1 < slow_prev1);
+
+   // --- Entry execution ---
+   if(crossUp || crossDown)
+      CloseAllPositions();
+}
+
+//+------------------------------------------------------------------+
+//| Entry Logic                                                      |
+//+------------------------------------------------------------------+
 void CheckForEntry()
 {
    // ATR value for volatility filtering
    double atr = atrBuffer[0];
-
-   // EMA values from previous candle
-   double fast = fastEma[1];
-   double slow = slowEma[1];
-
-   // Previous candle OHLC data
-   double close1 = rates[1].close;
-   double open1  = rates[1].open;
-   double high1  = rates[1].high;
-   double low1   = rates[1].low;
 
    // --- Sideways filter using slope ---
    double slope = sidewaysBuffer[0] - sidewaysBuffer[20];
@@ -166,44 +167,22 @@ void CheckForEntry()
    if(MathAbs(slope) < atr * 0.15)
       return;
 
-   // --- Trend strength filter ---
-   double trendStrength = MathAbs(fast - slow);
+double fast_prev2 = fastEma[2];
+double slow_prev2 = slowEma[2];
 
-   if(trendStrength < atr * 0.5)
-      return;
+double fast_prev1 = fastEma[1];
+double slow_prev1 = slowEma[1];
 
-   // --- Trend direction ---
-   bool uptrend   = fast > slow;
-   bool downtrend = fast < slow;
-
-   if(!uptrend && !downtrend)
-      return;
-
-   // --- Candle behavior ---
-   bool bullishReject = (close1 > open1) && (low1 < fast);
-   bool bearishReject = (close1 < open1) && (high1 > fast);
-
-   // --- EMA rejection signals ---
-   bool bullRejectInSlowEma = (low1 < slow) && (close1 > slow);
-   bool bearRejectInSlowEma = (high1 > slow) && (close1 < slow);
-
-   bool bullRejectInFastEma = (low1 < fast) && (close1 > fast);
-   bool bearRejectInFastEma = (high1 > fast) && (close1 < fast);
-
-   // --- EMA touch conditions ---
-   bool touchBuy  = (low1 <= fast);
-   bool touchSell = (high1 >= fast);
-
-   // --- Price crossing slow EMA ---
-   bool priceCrossBuy  = (close1 > slow) && (rates[2].close < slow);
-   bool priceCrossSell = (close1 < slow) && (rates[2].close > slow);
+//--- crossover conditions
+bool crossUp   = (fast_prev2 <= slow_prev2 && fast_prev1 > slow_prev1);
+bool crossDown = (fast_prev2 >= slow_prev2 && fast_prev1 < slow_prev1);
 
    // --- Entry execution ---
-   if(uptrend && priceCrossBuy && bullishReject && bullRejectInSlowEma && touchBuy)
-      OpenBuy();
+   if(crossUp)
+      OpenBuy(atr);
 
-   if(downtrend && priceCrossSell && bearishReject && bearRejectInSlowEma && touchSell)
-      OpenSell();
+   if(crossDown)
+      OpenSell(atr);
 }
 
 //+------------------------------------------------------------------+
@@ -228,33 +207,37 @@ bool HasOpenPosition()
 //+------------------------------------------------------------------+
 //| Open Buy                                                         |
 //+------------------------------------------------------------------+
-void OpenBuy()
+void OpenBuy(double sl)
 {
    if(HasOpenPosition())
       return;
 
    double entry = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double stopLoss = entry - sl;
+   double takeProfit = entry + sl;
 
-   SendOrder(ORDER_TYPE_BUY, entry);
+   SendOrder(ORDER_TYPE_BUY, entry, stopLoss, takeProfit);
 }
 
 //+------------------------------------------------------------------+
 //| Open Sell                                                        |
 //+------------------------------------------------------------------+
-void OpenSell()
+void OpenSell(double sl)
 {
    if(HasOpenPosition())
       return;
 
    double entry = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double stopLoss = entry + sl;
+   double takeProfit = entry - sl;
 
-   SendOrder(ORDER_TYPE_SELL, entry);
+   SendOrder(ORDER_TYPE_SELL, entry, stopLoss, takeProfit);
 }
 
 //+------------------------------------------------------------------+
 //| Send Order                                                       |
 //+------------------------------------------------------------------+
-void SendOrder(ENUM_ORDER_TYPE type, double price)
+void SendOrder(ENUM_ORDER_TYPE type, double price, double stopLoss, double takeProfit)
 {
    MqlTradeRequest req = {};
    MqlTradeResult  res = {};
@@ -266,7 +249,9 @@ void SendOrder(ENUM_ORDER_TYPE type, double price)
    req.price     = price;
    req.magic     = Expert_MagicNumber;
    req.deviation = 10;
+   req.sl = 0;
    req.comment   = Inp_Expert_Title;
+   req.tp = takeProfit;
 
    OrderSend(req, res);
 }
@@ -424,4 +409,46 @@ double OnTester()
       (payoff   * 0.1);
 
    return score;
+}
+
+//+------------------------------------------------------------------+
+void CloseAllPositions()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket > 0 && PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+            PositionGetInteger(POSITION_MAGIC) == Expert_MagicNumber)
+         {
+            MqlTradeRequest request = {};
+            MqlTradeResult result = {};
+            
+            request.action = TRADE_ACTION_DEAL;
+            request.symbol = _Symbol;
+            request.volume = PositionGetDouble(POSITION_VOLUME);
+            request.deviation = 10;
+            request.magic = Expert_MagicNumber;
+            request.position = ticket;
+            
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+            {
+               request.type = ORDER_TYPE_SELL;
+               request.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            }
+            else
+            {
+               request.type = ORDER_TYPE_BUY;
+               request.price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+            }
+            
+            ZeroMemory(result);
+            if(!OrderSend(request, result))
+            {
+               Print("Close position failed: ", result.retcode);
+            }
+         }
+      }
+   }
 }

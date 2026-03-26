@@ -19,6 +19,7 @@ input double SAR_Max  = 0.2;
 //================ SIDEWAYS =================
 input int    period = 34;
 input double Sideways_Buffer = 144;
+input int   emaSidewaysDiffRange = 50;
 
 //================ RISK =================
 input double lotSize = 0.01;
@@ -39,11 +40,11 @@ input bool UseTouch              = false;
 */
 
 //================ GLOBAL =================
-int fastEmaHandle, slowEmaHandle, sidewaysHandle;
+int fastEmaHandle, slowEmaHandle, sidewaysHandle, fastSidewaysHandle, slowSidewaysHandle;
 int sarHandle, atrHandle;
 
 double atrBuffer[];
-double fastEma[], slowEma[], sidewaysBuffer[];
+double fastEma[], slowEma[], sidewaysBuffer[], fastSideways[], slowSideways[];
 MqlRates rates[];
 
 datetime lastBarTime = 0;
@@ -56,6 +57,9 @@ int OnInit()
    fastEmaHandle  = iMA(_Symbol, _Period, FastEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
    slowEmaHandle  = iMA(_Symbol, _Period, SlowEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
    sidewaysHandle = iMA(_Symbol, _Period, period, 0, MODE_EMA, PRICE_CLOSE);
+   fastSidewaysHandle = iMA(_Symbol, _Period, 50, 0, MODE_EMA, PRICE_CLOSE);
+   slowSidewaysHandle = iMA(_Symbol, _Period, 100, 0, MODE_EMA, PRICE_CLOSE);
+
 
    sarHandle = iSAR(_Symbol, _Period, SAR_Step, SAR_Max);
    atrHandle = iATR(_Symbol, _Period, 14);
@@ -64,6 +68,8 @@ int OnInit()
    if(fastEmaHandle == INVALID_HANDLE ||
       slowEmaHandle == INVALID_HANDLE ||
       sidewaysHandle == INVALID_HANDLE ||
+      fastSidewaysHandle == INVALID_HANDLE ||
+      slowSidewaysHandle == INVALID_HANDLE ||
       sarHandle == INVALID_HANDLE ||
       atrHandle == INVALID_HANDLE)
       return INIT_FAILED;
@@ -72,6 +78,8 @@ int OnInit()
    ArraySetAsSeries(fastEma, true);
    ArraySetAsSeries(slowEma, true);
    ArraySetAsSeries(sidewaysBuffer, true);
+   ArraySetAsSeries(fastSideways, true);
+   ArraySetAsSeries(slowSideways, true);
    ArraySetAsSeries(atrBuffer, true);
    ArraySetAsSeries(rates, true);
 
@@ -93,6 +101,8 @@ void OnTick()
    if(CopyBuffer(sidewaysHandle, 0, 0, period, sidewaysBuffer) < period) return;
    if(CopyBuffer(atrHandle, 0, 0, period, atrBuffer) < period) return;
    if(CopyRates(_Symbol, _Period, 0, 3, rates) < 3) return;
+   if(CopyBuffer(fastSidewaysHandle, 0, 0, period, fastSideways) < period) return;
+   if(CopyBuffer(slowSidewaysHandle, 0, 0, period, slowSideways) < period) return;
 
    // Entry logic if market is not sideways
    if(!isSideways(period))
@@ -142,6 +152,15 @@ bool isSideways(int length)
    return false;
 }
 
+bool isUptrend()
+{
+   return fastSideways[1] > slowSideways[1] && (fastSideways[1] - slowSideways[1]) > (emaSidewaysDiffRange * _Point);
+}
+
+bool isDowntrend()
+{
+   return fastSideways[1] < slowSideways[1] && (slowSideways[1] - fastSideways[1]) > (emaSidewaysDiffRange * _Point);
+}
 //+------------------------------------------------------------------+
 //| Entry Logic                                                      |
 //+------------------------------------------------------------------+
@@ -199,10 +218,10 @@ void CheckForEntry()
    bool priceCrossSell = (close1 < slow) && (rates[2].close > slow);
 
    // --- Entry execution ---
-   if(uptrend && priceCrossBuy && bullishReject && bullRejectInSlowEma && touchBuy)
+   if(uptrend && priceCrossBuy && bullishReject && bullRejectInSlowEma && touchBuy && isUptrend())
       OpenBuy();
 
-   if(downtrend && priceCrossSell && bearishReject && bearRejectInSlowEma && touchSell)
+   if(downtrend && priceCrossSell && bearishReject && bearRejectInSlowEma && touchSell && isDowntrend())
       OpenSell();
 }
 
@@ -382,6 +401,35 @@ bool IsSARPositiveAgainstEntry()
    }
 
    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Deinitialization                                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   if(fastEmaHandle != INVALID_HANDLE)
+      IndicatorRelease(fastEmaHandle);
+
+   if(slowEmaHandle != INVALID_HANDLE)
+      IndicatorRelease(slowEmaHandle);
+
+   if(sidewaysHandle != INVALID_HANDLE)
+      IndicatorRelease(sidewaysHandle);
+
+   if(fastSidewaysHandle != INVALID_HANDLE)
+      IndicatorRelease(fastSidewaysHandle);
+
+   if(slowSidewaysHandle != INVALID_HANDLE)
+      IndicatorRelease(slowSidewaysHandle);
+
+   if(sarHandle != INVALID_HANDLE)
+      IndicatorRelease(sarHandle);
+
+   if(atrHandle != INVALID_HANDLE)
+      IndicatorRelease(atrHandle);
+
+   Print("EA Deinitialized. Reason: ", reason);
 }
 
 //+------------------------------------------------------------------+
