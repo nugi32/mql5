@@ -4,7 +4,8 @@
 #property strict
 
 input double LotSize = 0.01;
-input int period = 50;
+input int ATR_Period = 14;
+input int MA_Period = 50;
 
 // --- sideways params (dari indikator)
 input int EMA_Period = 34;
@@ -12,7 +13,7 @@ input double Sideways_Buffer = 155;
 
 input double ATR_Multiplier = 1.5;
 input double SL_Multiplier = 1.5;
-input double TP_Gap_Multiplier = 1.0;
+input double TP_Multiplier = 1.0;
 input int Slippage = 10;
 
 //--- handles
@@ -23,8 +24,8 @@ int emaHandle;
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   atrHandle = iATR(_Symbol, _Period, period);
-   maHandle  = iMA(_Symbol, _Period, period, 0, MODE_SMA, PRICE_CLOSE);
+   atrHandle = iATR(_Symbol, _Period, ATR_Period);
+   maHandle  = iMA(_Symbol, _Period, MA_Period, 0, MODE_SMA, PRICE_CLOSE);
    emaHandle = iMA(_Symbol, _Period, EMA_Period, 0, MODE_EMA, PRICE_CLOSE);
 
    if(atrHandle == INVALID_HANDLE || maHandle == INVALID_HANDLE || emaHandle == INVALID_HANDLE)
@@ -72,7 +73,7 @@ void OnTick()
    if(currentPrice > currentMA && deviation > threshold)
    {
       sl = currentPrice + (currentATR * SL_Multiplier);
-      tp = currentMA + (currentATR * TP_Gap_Multiplier);
+      tp = currentPrice - (currentATR * TP_Multiplier);
       tradeSell(sl, tp);
    }
 
@@ -80,7 +81,7 @@ void OnTick()
    if(currentPrice < currentMA && deviation > threshold)
    {
       sl = currentPrice - (currentATR * SL_Multiplier);
-      tp = currentMA - (currentATR * TP_Gap_Multiplier);
+      tp = currentPrice + (currentATR * TP_Multiplier);
       tradeBuy(sl, tp);
    }
 }

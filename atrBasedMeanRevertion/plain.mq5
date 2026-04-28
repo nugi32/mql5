@@ -3,7 +3,7 @@
 //+------------------------------------------------------------------+
 #property strict
 
-input double LotSize = 0.1;
+input double LotSize = 0.01;
 input int ATR_Period = 14;
 input int MA_Period = 50;
 
