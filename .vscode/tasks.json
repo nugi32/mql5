@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Compile Active MQL5",
+      "type": "process",
+      "command": "C:\\Program Files\\MetaTrader 5\\metaeditor64.exe",
+      "args": [
+        "/compile:${file}",
+        "/log:${workspaceFolder}\\compile.log"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}
