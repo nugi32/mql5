@@ -4,11 +4,11 @@
 #property strict
 
 input group "POSITION SETTINGS"
-input double LotSize = 0.01;
+input int LotSize = 0.1;
 input int Slippage = 10;
+input double RiskPercent = 1.0;
 
-input group "INDICATOR SETTINGS"
-input int ATR_Period = 14;
+input group "INDICATOR SETTINGS" input int ATR_Period = 14;
 input double ATR_Multiplier = 1.5;
 
 // Sideways detection
@@ -17,25 +17,20 @@ input double Sideways_Buffer = 155;
 
 input int meanPeriod = 50;
 
-input group "STOP LOSS & TAKE PROFIT"
-input double SL_Multiplier = 1.5;
+input group "STOP LOSS & TAKE PROFIT" input double SL_Multiplier = 1.5;
 input double TP_Multiplier = 1.0;
 input double TP_Gap_Multiplier = 1.0;
 
-input group "FEATURE TOGGLES"
-input bool useBreakEven = false;
+input group "FEATURE TOGGLES" input bool useBreakEven = false;
 
-input group "TP SETTINGS"
-input bool useATR = true;
+input group "TP SETTINGS" input bool useATR = true;
 input bool useEma = false;
 input bool useTrailingStop = false;
 
-input group "SAR TRAILING"
-input double SAR_Step = 0.02;
+input group "SAR TRAILING" input double SAR_Step = 0.02;
 input double SAR_Max = 0.2;
 
-input group "BREAK EVEN"
-input double BE_Trigger_ATR = 1.0;
+input group "BREAK EVEN" input double BE_Trigger_ATR = 1.0;
 input double BE_Lock_ATR = 0.2;
 
 //--- Handles
@@ -107,7 +102,7 @@ void OnTick()
       {
          sl = currentPrice + (currentATR * SL_Multiplier);
          tp = currentPrice - (currentATR * TP_Multiplier);
-         tradeSell(sl, tp);
+         tradeSell(sl, tp, currentPrice);
       }
 
       // BUY
@@ -115,7 +110,7 @@ void OnTick()
       {
          sl = currentPrice - (currentATR * SL_Multiplier);
          tp = currentPrice + (currentATR * TP_Multiplier);
-         tradeBuy(sl, tp);
+         tradeBuy(sl, tp, currentPrice);
       }
    }
    else if (useEma)
@@ -125,7 +120,7 @@ void OnTick()
       {
          sl = currentPrice + (currentATR * SL_Multiplier);
          tp = currentMA + (currentATR * TP_Gap_Multiplier);
-         tradeSell(sl, tp);
+         tradeSell(sl, tp, currentPrice);
       }
 
       // BUY
@@ -133,26 +128,25 @@ void OnTick()
       {
          sl = currentPrice - (currentATR * SL_Multiplier);
          tp = currentMA - (currentATR * TP_Gap_Multiplier);
-         tradeBuy(sl, tp);
+         tradeBuy(sl, tp, currentPrice);
+      }
+   }
+   else if (useTrailingStop)
+   {
+      // SELL
+      if (currentPrice > currentMA && deviation > threshold)
+      {
+         sl = currentPrice + (currentATR * SL_Multiplier);
+         tp = currentMA + (currentATR * TP_Gap_Multiplier);
+         tradeSell(sl, tp, currentPrice);
       }
 
-      else if (useTrailingStop)
+      // BUY
+      if (currentPrice < currentMA && deviation > threshold)
       {
-         // SELL
-         if (currentPrice > currentMA && deviation > threshold)
-         {
-            sl = currentPrice + (currentATR * SL_Multiplier);
-            tp = currentMA + (currentATR * TP_Gap_Multiplier);
-            tradeSell(sl, tp);
-         }
-
-         // BUY
-         if (currentPrice < currentMA && deviation > threshold)
-         {
-            sl = currentPrice - (currentATR * SL_Multiplier);
-            tp = currentMA - (currentATR * TP_Gap_Multiplier);
-            tradeBuy(sl, tp);
-         }
+         sl = currentPrice - (currentATR * SL_Multiplier);
+         tp = currentMA - (currentATR * TP_Gap_Multiplier);
+         tradeBuy(sl, tp, currentPrice);
       }
    }
 }
@@ -161,16 +155,23 @@ void OnTick()
 //+------------------------------------------------------------------+
 bool isSideways()
 {
-   double sideway[];
+   double sideway[], atr[];
    ArraySetAsSeries(sideway, true);
+   ArraySetAsSeries(atr, true);
 
    if (CopyBuffer(sidewayHandle, 0, 0, 2, sideway) <= 0)
       return false;
+   if (CopyBuffer(atrHandle, 0, 0, 1, atr) <= 0)
+      return false;
 
    double sideway_diff = MathAbs(sideway[0] - sideway[1]);
-   double buffer_price = Sideways_Buffer * _Point;
 
-   return (sideway_diff <= buffer_price);
+   double buffer_fixed = Sideways_Buffer * _Point;
+   double buffer_atr = atr[0] * 0.2; // bisa kamu jadikan input
+
+   double buffer_total = buffer_fixed + buffer_atr;
+
+   return (sideway_diff <= buffer_total);
 }
 //+------------------------------------------------------------------+
 //| POSITION MANAGEMENT                                              |
@@ -270,8 +271,12 @@ void modifySL(ulong ticket, double newSL, double tp)
 //+------------------------------------------------------------------+
 //| BUY                                                              |
 //+------------------------------------------------------------------+
-void tradeBuy(double sl, double tp)
+void tradeBuy(double sl, double tp, double currentPrice)
 {
+   
+double slDistance = MathAbs(currentPrice - sl);
+double lot = calculateLot(slDistance);
+
    MqlTradeRequest request;
    MqlTradeResult result;
 
@@ -281,7 +286,7 @@ void tradeBuy(double sl, double tp)
    request.action = TRADE_ACTION_DEAL;
    request.type = ORDER_TYPE_BUY;
    request.symbol = _Symbol;
-   request.volume = LotSize;
+   request.volume = lot;
    request.price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    request.sl = NormalizeDouble(sl, _Digits);
    request.tp = NormalizeDouble(tp, _Digits);
@@ -293,8 +298,12 @@ void tradeBuy(double sl, double tp)
 //+------------------------------------------------------------------+
 //| SELL                                                             |
 //+------------------------------------------------------------------+
-void tradeSell(double sl, double tp)
+void tradeSell(double sl, double tp, double currentPrice)
 {
+
+   double slDistance = MathAbs(currentPrice - sl);
+double lot = calculateLot(slDistance);
+
    MqlTradeRequest request;
    MqlTradeResult result;
 
@@ -304,7 +313,7 @@ void tradeSell(double sl, double tp)
    request.action = TRADE_ACTION_DEAL;
    request.type = ORDER_TYPE_SELL;
    request.symbol = _Symbol;
-   request.volume = LotSize;
+   request.volume = lot;
    request.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    request.sl = NormalizeDouble(sl, _Digits);
    request.tp = NormalizeDouble(tp, _Digits);
@@ -314,3 +323,62 @@ void tradeSell(double sl, double tp)
    OrderSend(request, result);
 }
 //+------------------------------------------------------------------+
+double calculateLot(double slPriceDistance)
+{
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double riskMoney = balance * (RiskPercent / 100.0);
+
+   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+
+   double valuePerPoint = tickValue / tickSize;
+
+   double slPoints = slPriceDistance / _Point;
+
+   if (slPoints <= 0)
+      return LotSize;
+
+   double lot = riskMoney / (slPoints * valuePerPoint);
+
+   //================ NORMALISASI =================
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+
+   lot = MathFloor(lot / lotStep) * lotStep;
+
+   //================ RULE KAMU =================
+   if (lot < minLot)
+      lot = minLot;
+
+   // safety tambahan (biar ga over)
+   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   if (lot > maxLot)
+      lot = maxLot;
+
+   return NormalizeDouble(lot, 2);
+}
+//+------------------------------------------------------------------+
+double OnTester()
+{
+   double profit      = TesterStatistics(STAT_PROFIT);
+   double drawdown    = TesterStatistics(STAT_EQUITY_DDREL_PERCENT);
+   double trades      = TesterStatistics(STAT_TRADES);
+   double sharpe      = TesterStatistics(STAT_SHARPE_RATIO);
+
+   //================ SAFETY =================
+   if (trades < 50)        
+      return -1000;
+
+   if (drawdown <= 0)
+      return -1000;
+
+   //================ NORMALISASI =================
+   double ddFactor     = 1.0 / drawdown;     
+   double tradeFactor  = MathLog(trades);    
+   double sharpeFactor = sharpe;
+
+   //================ FINAL SCORE =================
+   double score = (profit * ddFactor) * sharpeFactor * tradeFactor;
+
+   return score;
+}
