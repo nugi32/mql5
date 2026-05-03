@@ -4,7 +4,7 @@
 #property strict
 
 input group "POSITION SETTINGS"
-input double LotSize = 0.01;
+input int LotSize = 0.1;
 input int Slippage = 10;
 input double RiskPercent = 1.0;
 
@@ -64,8 +64,24 @@ void OnDeinit(const int reason)
    IndicatorRelease(sarHandle);
 }
 //+------------------------------------------------------------------+
+bool isNewBar()
+{
+   static datetime lastTime = 0;
+   datetime currentTime = iTime(_Symbol, _Period, 0);
+
+   if (currentTime != lastTime)
+   {
+      lastTime = currentTime;
+      return true;
+   }
+   return false;
+}
+//+------------------------------------------------------------------+
 void OnTick()
 {
+   if (!isNewBar())
+      return;
+
    managePosition();
 
    if (!isSideways())
@@ -73,80 +89,84 @@ void OnTick()
    if (PositionsTotal() > 0)
       return;
 
-   double atr[], ma[], close[];
+double atr[], ma[], close[], open[];
 
-   ArraySetAsSeries(atr, true);
-   ArraySetAsSeries(ma, true);
-   ArraySetAsSeries(close, true);
+ArraySetAsSeries(atr, true);
+ArraySetAsSeries(ma, true);
+ArraySetAsSeries(close, true);
+ArraySetAsSeries(open, true);
 
-   if (CopyBuffer(atrHandle, 0, 0, 2, atr) <= 0)
-      return;
-   if (CopyBuffer(maHandle, 0, 0, 2, ma) <= 0)
-      return;
-   if (CopyClose(_Symbol, _Period, 0, 2, close) <= 0)
-      return;
+if (CopyBuffer(atrHandle, 0, 0, 3, atr) <= 0)
+   return;
+if (CopyBuffer(maHandle, 0, 0, 3, ma) <= 0)
+   return;
+if (CopyClose(_Symbol, _Period, 0, 3, close) <= 0)
+   return;
+if (CopyOpen(_Symbol, _Period, 0, 2, open) <= 0)
+   return;
 
-   double currentATR = atr[0];
-   double currentMA = ma[0];
-   double currentPrice = close[0];
+double currentATR     = atr[1];
+double currentMA      = ma[1];
 
-   double deviation = MathAbs(currentPrice - currentMA);
-   double threshold = currentATR * ATR_Multiplier;
+double signalPrice    = close[1]; // candle closed
+double entryPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+double deviation = MathAbs(signalPrice - currentMA);
+double threshold = currentATR * ATR_Multiplier;
 
    double sl, tp;
 
    if (useATR)
    {
       // SELL
-      if (currentPrice > currentMA && deviation > threshold)
+      if (signalPrice  > currentMA && deviation > threshold)
       {
-         sl = currentPrice + (currentATR * SL_Multiplier);
-         tp = currentPrice - (currentATR * TP_Multiplier);
-         tradeSell(sl, tp, currentPrice);
+         sl = entryPrice + (currentATR * SL_Multiplier);
+         tp = entryPrice - (currentATR * TP_Multiplier);
+         tradeSell(sl, tp);
       }
 
       // BUY
-      if (currentPrice < currentMA && deviation > threshold)
+      if (signalPrice  < currentMA && deviation > threshold)
       {
-         sl = currentPrice - (currentATR * SL_Multiplier);
-         tp = currentPrice + (currentATR * TP_Multiplier);
-         tradeBuy(sl, tp, currentPrice);
+         sl = entryPrice - (currentATR * SL_Multiplier);
+         tp = entryPrice + (currentATR * TP_Multiplier);
+         tradeBuy(sl, tp);
       }
    }
    else if (useEma)
    {
       // SELL
-      if (currentPrice > currentMA && deviation > threshold)
+      if (signalPrice  > currentMA && deviation > threshold)
       {
-         sl = currentPrice + (currentATR * SL_Multiplier);
-         tp = currentMA + (currentATR * TP_Gap_Multiplier);
-         tradeSell(sl, tp, currentPrice);
+         sl = entryPrice + (currentATR * SL_Multiplier);
+         tp = entryPrice + (currentATR * TP_Gap_Multiplier);
+         tradeSell(sl, tp);
       }
 
       // BUY
-      if (currentPrice < currentMA && deviation > threshold)
+      if (signalPrice  < currentMA && deviation > threshold)
       {
-         sl = currentPrice - (currentATR * SL_Multiplier);
-         tp = currentMA - (currentATR * TP_Gap_Multiplier);
-         tradeBuy(sl, tp, currentPrice);
+         sl = entryPrice - (currentATR * SL_Multiplier);
+         tp = entryPrice - (currentATR * TP_Gap_Multiplier);
+         tradeBuy(sl, tp);
       }
    }
    else if (useTrailingStop)
    {
       // SELL
-      if (currentPrice > currentMA && deviation > threshold)
+      if (signalPrice  > currentMA && deviation > threshold)
       {
-         sl = currentPrice + (currentATR * SL_Multiplier);
-         tp = currentMA + (currentATR * TP_Gap_Multiplier);
-         tradeSell(sl, tp, currentPrice);
+         sl = entryPrice + (currentATR * SL_Multiplier);
+         tp = entryPrice + (currentATR * TP_Gap_Multiplier);
+         tradeSell(sl, tp);
       }
 
       // BUY
-      if (currentPrice < currentMA && deviation > threshold)
+      if (signalPrice < currentMA && deviation > threshold)
       {
-         sl = currentPrice - (currentATR * SL_Multiplier);
-         tp = currentMA - (currentATR * TP_Gap_Multiplier);
-         tradeBuy(sl, tp, currentPrice);
+         sl = entryPrice - (currentATR * SL_Multiplier);
+         tp = entryPrice - (currentATR * TP_Gap_Multiplier);
+         tradeBuy(sl, tp);
       }
    }
 }
@@ -159,15 +179,15 @@ bool isSideways()
    ArraySetAsSeries(sideway, true);
    ArraySetAsSeries(atr, true);
 
-   if (CopyBuffer(sidewayHandle, 0, 0, 2, sideway) <= 0)
+   if (CopyBuffer(sidewayHandle, 0, 0, 5, sideway) <= 0)
       return false;
-   if (CopyBuffer(atrHandle, 0, 0, 1, atr) <= 0)
+   if (CopyBuffer(atrHandle, 0, 0, 3, atr) <= 0)
       return false;
 
-   double sideway_diff = MathAbs(sideway[0] - sideway[1]);
+   double sideway_diff = MathAbs(sideway[1] - sideway[2]);
 
    double buffer_fixed = Sideways_Buffer * _Point;
-   double buffer_atr = atr[0] * 0.2; // bisa kamu jadikan input
+   double buffer_atr = atr[1] * 0.2;
 
    double buffer_total = buffer_fixed + buffer_atr;
 
@@ -271,10 +291,11 @@ void modifySL(ulong ticket, double newSL, double tp)
 //+------------------------------------------------------------------+
 //| BUY                                                              |
 //+------------------------------------------------------------------+
-void tradeBuy(double sl, double tp, double currentPrice)
+void tradeBuy(double sl, double tp)
 {
    
-double slDistance = MathAbs(currentPrice - sl);
+double entryPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+double slDistance = MathAbs(entryPrice - sl);
 double lot = calculateLot(slDistance);
 
    MqlTradeRequest request;
@@ -298,10 +319,11 @@ double lot = calculateLot(slDistance);
 //+------------------------------------------------------------------+
 //| SELL                                                             |
 //+------------------------------------------------------------------+
-void tradeSell(double sl, double tp, double currentPrice)
+void tradeSell(double sl, double tp)
 {
 
-   double slDistance = MathAbs(currentPrice - sl);
+double entryPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+double slDistance = MathAbs(entryPrice - sl);
 double lot = calculateLot(slDistance);
 
    MqlTradeRequest request;

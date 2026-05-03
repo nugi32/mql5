@@ -15,6 +15,10 @@ input int      EMA_Period = 34;
 input double   Sideways_Buffer = 89;
 input int      Dot_Code = 159;
 
+//for h1 and m30 use default settings
+//for m15 use 21 and 55
+//for m5 use 21 and 34
+
 //---- buffers
 double DotBuffer[];
 double EMABuffer[];
