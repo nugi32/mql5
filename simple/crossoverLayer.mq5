@@ -20,9 +20,8 @@ input double CrossMargin   = 0.15;
 input int layerPeriod       = 20;     
 input ENUM_TIMEFRAMES layerTimeframe = PERIOD_CURRENT;
 input double layerSLopeTreshold = 0.10;
-
-input double layerSlopeBuffer   = 0.10;  
-input int layerSlopePeriod       = 5;    
+input int layerSlopePeriod = 5;
+input double layerSlopeBuffer   = 0.10;    
 
 input double SarStep       = 0.02;
 input double SarMax        = 0.2;
@@ -178,7 +177,7 @@ bool IsLayerBullish()
     ArraySetAsSeries(atr, true);
     ArraySetAsSeries(close, true);
 
-    if(CopyBuffer(layerHandle, 0, 0, 3, layer) < 3)
+    if(CopyBuffer(layerHandle, 0, 0, layerSlopePeriod + 1, layer) < layerSlopePeriod + 1)
         return false;
 
     if(CopyBuffer(atrHandle, 0, 0, 3, atr) < 3)
@@ -190,9 +189,9 @@ bool IsLayerBullish()
 
     bool isAbove = close[1] > layer[1];
 
-    double slope = (layer[0] - layer[1]) / layer[1] * 100.0;
+    double slope = (layer[0] - layer[layerSlopePeriod]) / layer[layerSlopePeriod] * 100.0;
 
-    return isAbove && slope > layerSlopeThreshold;
+    return isAbove;
 }
 
 
@@ -204,7 +203,7 @@ bool IsLayerBearish()
     ArraySetAsSeries(atr, true);
     ArraySetAsSeries(close, true);
 
-    if(CopyBuffer(layerHandle, 0, 0, 3, layer) < 3)
+    if(CopyBuffer(layerHandle, 0, 0, layerSlopePeriod + 1, layer) < layerSlopePeriod + 1)
         return false;
 
     if(CopyBuffer(atrHandle, 0, 0, 3, atr) < 3)
@@ -216,9 +215,9 @@ bool IsLayerBearish()
 
     bool isBelow = close[1] < layer[1];
 
-    double slope = (layer[1] - layer[0]) / layer[1] * 100.0;
+    double slope = (layer[layerSlopePeriod] - layer[0]) / layer[layerSlopePeriod] * 100.0;
 
-    return isBelow && slope > layerSlopeThreshold;
+    return isBelow ;
 }
 //+------------------------------------------------------------------+
 //   ALL FUNCTIONS BELOW UNCHANGED
