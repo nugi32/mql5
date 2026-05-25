@@ -1,188 +1,607 @@
-
 //+--------------------------------------------------------------------------------+
-//| control-bar-opening-single-symbol.mq5                                          |
+//| control-bar-ohlc-virtual.mq5                                                   |
 //|                                                                                |
-//| DISCLAIMER AND TERMS OF USE OF THIS EXPERT ADVISOR                             |
-//| THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"    |
-//| AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE      |
-//| IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE |
-//| DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE   |
-//| FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL     |
-//| DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR     |
-//| SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER     |
-//| CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,  |
-//| OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE  |
-//| OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.           |
+//| Original framework: Darwinex / Martyn Tinsley                                  |
+//| OHLC virtual feed integration: replaces the single-fire M1 bar gate            |
+//| with a 4-point OHLC pump so that checkEntry / ProcessTradeClosures /            |
+//| ProcessTradeOpens are called at each O/L/H/C price level of every M1 bar.      |
 //+--------------------------------------------------------------------------------+
-
-#property copyright "Darwinex"
-#property link "http://www.darwinex.com"
-#property description "Bar Controlling Code (Single Symbol) - Darwinex Advanced MQL Coding Video Series. Author: Martyn Tinsley, Trade Like A Machine Ltd"
-
 #property strict
 
+//==================================================================
+//  ENUMS
+//==================================================================
 enum ENUM_BAR_PROCESSING_METHOD
 {
-    PROCESS_ALL_DELIVERED_TICKS,             // Process All Delivered Ticks
-    ONLY_PROCESS_TICKS_FROM_NEW_M1_BAR,      // Only Process Ticks From New M1 Bar
-    ONLY_PROCESS_TICKS_FROM_NEW_TRADE_TF_BAR // Only Process Ticks From New Bar in Trade TF
+    PROCESS_ALL_DELIVERED_TICKS,              // Process All Delivered Ticks
+    ONLY_PROCESS_TICKS_FROM_NEW_M1_BAR,       // M1 OHLC Virtual Feed (4 events/bar)
+    ONLY_PROCESS_TICKS_FROM_NEW_TRADE_TF_BAR  // Only Process Ticks From New Bar in Trade TF
 };
 
-// ################
-//  Input Variables
-// ################
-
-input ENUM_TIMEFRAMES TradeTimeframe = PERIOD_M15;                                         // Trading Timeframe
-input ENUM_BAR_PROCESSING_METHOD BarProcessingMethod = ONLY_PROCESS_TICKS_FROM_NEW_M1_BAR; // EA Bar Processing Method
-
-// ################
-// Global Variables
-// ################
-
-int TicksReceivedCount = 0;                            // Number of ticks received by the EA
-int TicksProcessedCount = 0;                           // Number of ticks processed by the EA (will depend on the BarProcessingMethod being used)
-datetime TimeLastTickProcessed = D'1971.01.01 00:00'; // Used to control the processing of trades so that processing only happens at the desired intervals (to allow like-for-like back testing between the Strategy Tester and Live Trading) - Seeded with a past date before any backtesting will ever be run
-
-int iBarToUseForProcessing; // This will either be bar 0 or bar 1, and depends on the BarProcessingMethod - Set in OnInit()
-
-int OnInit()
+//--- Which OHLC event fired (for logging and context)
+enum ENUM_OHLC_EVENT
 {
+    OHLC_NONE  = -1,
+    OHLC_OPEN  =  0,
+    OHLC_LOW   =  1,   // Bull: Low comes before High (per MT5 docs)
+    OHLC_HIGH  =  2,
+    OHLC_CLOSE =  3
+};
 
-    atrHandle = iATR(_Symbol, _Period, ATR_Period);
-    maHandle = iMA(_Symbol, _Period, meanPeriod, 0, MODE_SMA, PRICE_CLOSE);
-    sidewayHandle = iMA(_Symbol, _Period, Sideways_Period, 0, MODE_SMA, PRICE_CLOSE);
-    sarHandle = iSAR(_Symbol, _Period, SAR_Step, SAR_Max);
-    // ################################
-    // Determine which bar we will used (0 or 1) to perform processing of data
-    // ################################
+//==================================================================
+//  INPUTS
+//==================================================================
+input ENUM_TIMEFRAMES              TradeTimeframe     = PERIOD_M15;
+input ENUM_BAR_PROCESSING_METHOD   BarProcessingMethod = ONLY_PROCESS_TICKS_FROM_NEW_M1_BAR;
 
-    if (BarProcessingMethod == PROCESS_ALL_DELIVERED_TICKS) // Process data every tick that is 'delivered' to the EA
-        iBarToUseForProcessing = 0;                         // The rationale here is that it is only worth processing every tick if you are actually going to use bar 0 from the trade TF, the value of which changes throughout the bar in the Trade TF                                          //The rationale here is that we want to use values that are right up to date - otherwise it is pointless doing this every 10 seconds
+//==================================================================
+//  ── VIRTUAL FEED LAYER ──────────────────────────────────────────
+//  Implements the MT5 "1-Minute OHLC" tick generation table:
+//
+//   TickVol = 1  →  [ Close ]
+//   TickVol = 2  →  [ Open, Close ]
+//   TickVol ≥ 3,
+//     Bull (C≥O) →  [ Open, Low, High, Close ]
+//     Bear (C<O) →  [ Open, High, Low, Close ]
+//   Doji (C==O) → direction = opposite of previous bar
+//==================================================================
 
-    else if (BarProcessingMethod == ONLY_PROCESS_TICKS_FROM_NEW_M1_BAR) // Process trades based on 'any' TF, every minute.
-        iBarToUseForProcessing = 0;                                     // The rationale here is that it is only worth processing every minute if you are actually going to use bar 0 from the trade TF, the value of which changes throughout the bar in the Trade TF
+struct SVirtualTick
+{
+    datetime      time;
+    double        bid;          // OHLC prices are Bid in MT5 history
+    double        ask;          // bid + spread * _Point
+    double        last;         // = bid
+    ENUM_OHLC_EVENT event;      // which OHLC point this tick represents
+};
 
-    else if (BarProcessingMethod == ONLY_PROCESS_TICKS_FROM_NEW_TRADE_TF_BAR) // Process when a new bar appears in the TF being used. So the M15 TF is processed once every 15 minutes, the TF60 is processed once every hour etc...
-        iBarToUseForProcessing = 1;                                           // The rationale here is that if you only process data when a new bar in the trade TF appears, then it is better to use the indicator data etc from the last 'completed' bar, which will not subsequently change. (If using indicator values from bar 0 these will change throughout the evolution of bar 0)
+struct SBarDescriptor
+{
+    datetime barTime;
+    double   O, H, L, C;
+    long     tickVol;
+    int      spread;
+    bool     bullish;
+};
 
-    Print("EA USING " + EnumToString(BarProcessingMethod) + " PROCESSING METHOD AND INDICATORS WILL USE BAR " + IntegerToString(iBarToUseForProcessing));
+enum ENUM_ENTRY_SIGNAL
+{
+   SIGNAL_NONE = 0,
+   SIGNAL_BUY,
+   SIGNAL_SELL
+};
 
-    // Perform immediate update to screen so that if out of hours (e.g. at the weekend), the screen will still update (this is also run in OnTick())
-    // if(!MQLInfoInteger(MQL_TESTER))
-    OutputStatusToScreen();
+ENUM_ENTRY_SIGNAL gPendingSignal = SIGNAL_NONE;
+double gPendingSL = 0;
+double gPendingTP = 0;
+double gPendingPrice = 0;
 
-    if (atrHandle == INVALID_HANDLE ||
-        maHandle == INVALID_HANDLE ||
-        sidewayHandle == INVALID_HANDLE ||
-        sarHandle == INVALID_HANDLE)
+datetime gLastTradeBar = 0;
+
+datetime gSignalBarTime = 0;
+bool     gSignalLocked  = false;
+//------------------------------------------------------------------
+class CVirtualFeed
+{
+private:
+    string          m_sym;
+    SBarDescriptor  m_bar;
+    SBarDescriptor  m_prevBar;
+    bool            m_hasPrev;
+
+    int             m_seqIdx;
+    int             m_seqLen;
+    ENUM_OHLC_EVENT m_seq[4];
+
+    datetime        m_lastBarTime;
+
+    //--- Doji resolution: opposite of previous bar direction
+    bool ResolveBullish(bool raw)
     {
-        Print("Init error: ", GetLastError());
-        return (INIT_FAILED);
+        if (m_bar.O != m_bar.C) return raw;
+        if (!m_hasPrev)         return raw;
+        return !(m_prevBar.C >= m_prevBar.O);
     }
-    ArrayResize(vsl, 0);
-    return (INIT_SUCCEEDED);
+
+    void BuildSequence()
+    {
+        m_seqIdx = 0;
+        long tv  = m_bar.tickVol;
+
+        if (tv <= 1)
+        {
+            m_seqLen    = 1;
+            m_seq[0]    = OHLC_CLOSE;
+            return;
+        }
+        if (tv == 2)
+        {
+            m_seqLen    = 2;
+            m_seq[0]    = OHLC_OPEN;
+            m_seq[1]    = OHLC_CLOSE;
+            return;
+        }
+        // tv >= 3 → full 4-event sequence
+        m_seqLen = 4;
+        m_seq[0] = OHLC_OPEN;
+        m_seq[3] = OHLC_CLOSE;
+        if (m_bar.bullish)
+        {
+            m_seq[1] = OHLC_LOW;   // opening shadow hits Low first
+            m_seq[2] = OHLC_HIGH;
+        }
+        else
+        {
+            m_seq[1] = OHLC_HIGH;  // opening shadow hits High first
+            m_seq[2] = OHLC_LOW;
+        }
+    }
+
+    double PriceFor(ENUM_OHLC_EVENT ev) const
+    {
+        switch(ev)
+        {
+            case OHLC_OPEN:  return m_bar.O;
+            case OHLC_HIGH:  return m_bar.H;
+            case OHLC_LOW:   return m_bar.L;
+            case OHLC_CLOSE: return m_bar.C;
+            default:         return m_bar.C;
+        }
+    }
+
+    datetime TimeFor(int step) const
+    {
+        if (m_seqLen == 1)          return m_bar.barTime + 59;
+        if (step == 0)              return m_bar.barTime;
+        if (step == m_seqLen - 1)   return m_bar.barTime + 59;
+        return m_bar.barTime + (datetime)(step * 59 / (m_seqLen - 1));
+    }
+
+    SVirtualTick MakeTick(datetime t, double bidPx, ENUM_OHLC_EVENT ev) const
+    {
+        double sp = m_bar.spread * _Point;
+        SVirtualTick tk;
+        tk.time  = t;
+        tk.bid   = NormalizeDouble(bidPx, _Digits);
+        tk.ask   = NormalizeDouble(bidPx + sp, _Digits);
+        tk.last  = tk.bid;
+        tk.event = ev;
+        return tk;
+    }
+
+public:
+    void Init(string sym)
+    {
+        m_sym         = sym;
+        m_lastBarTime = 0;
+        m_seqIdx      = 4;
+        m_seqLen      = 0;
+        m_hasPrev     = false;
+        ZeroMemory(m_bar);
+        ZeroMemory(m_prevBar);
+    }
+
+    //--- Returns true + fills 'tick' when a new virtual event is ready.
+    bool Next(SVirtualTick &tick)
+    {
+        if (m_seqIdx >= m_seqLen)
+        {
+            // Try loading the most-recently completed M1 bar (index 1)
+            datetime barTimes[];
+            if (CopyTime(m_sym, PERIOD_M1, 1, 1, barTimes) <= 0) return false;
+            if (barTimes[0] == m_lastBarTime)                     return false;
+
+            MqlRates rates[];
+            if (CopyRates(m_sym, PERIOD_M1, 1, 1, rates) <= 0)   return false;
+
+            m_lastBarTime = barTimes[0];
+            m_prevBar     = m_bar;
+            m_hasPrev     = true;
+
+            m_bar.barTime = rates[0].time;
+            m_bar.O       = rates[0].open;
+            m_bar.H       = rates[0].high;
+            m_bar.L       = rates[0].low;
+            m_bar.C       = rates[0].close;
+            m_bar.tickVol = rates[0].tick_volume;
+            m_bar.spread  = (int)rates[0].spread;
+            if (m_bar.spread <= 0)
+                m_bar.spread = (int)SymbolInfoInteger(m_sym, SYMBOL_SPREAD);
+
+            m_bar.bullish = ResolveBullish(m_bar.C >= m_bar.O);
+            BuildSequence();
+        }
+
+        if (m_seqIdx >= m_seqLen) return false;
+
+        ENUM_OHLC_EVENT ev = m_seq[m_seqIdx];
+        double          px = PriceFor(ev);
+        datetime        t  = TimeFor(m_seqIdx);
+
+        tick = MakeTick(t, px, ev);
+        m_seqIdx++;
+        return true;
+    }
+
+    bool     HasData()    const { return m_lastBarTime > 0; }
+    SBarDescriptor Bar()  const { return m_bar; }
+};
+
+//------------------------------------------------------------------
+class CVirtualMarketContext
+{
+private:
+    SVirtualTick    m_tick;
+    bool            m_valid;
+
+public:
+    void Init()  { m_valid = false; ZeroMemory(m_tick); }
+
+    void Update(const SVirtualTick &tk) { m_tick = tk; m_valid = true; }
+
+    bool            IsValid()   const { return m_valid; }
+    double          Bid()       const { return m_tick.bid; }
+    double          Ask()       const { return m_tick.ask; }
+    double          Last()      const { return m_tick.last; }
+    datetime        Time()      const { return m_tick.time; }
+    ENUM_OHLC_EVENT Event()     const { return m_tick.event; }
+
+    string EventName() const
+    {
+        switch(m_tick.event)
+        {
+            case OHLC_OPEN:  return "OPEN";
+            case OHLC_HIGH:  return "HIGH";
+            case OHLC_LOW:   return "LOW";
+            case OHLC_CLOSE: return "CLOSE";
+            default:         return "NONE";
+        }
+    }
+};
+
+//==================================================================
+//  GLOBAL INSTANCES
+//==================================================================
+CVirtualFeed          gFeed;
+CVirtualMarketContext gCtx;
+
+//==================================================================
+//  EA GLOBALS (from original framework)
+//==================================================================
+int TicksReceivedCount   = 0;
+int TicksProcessedCount  = 0;
+
+// For TRADE_TF mode only — OHLC mode uses gFeed, not this timestamp
+datetime TimeLastTickProcessed = D'1971.01.01 00:00';
+
+int iBarToUseForProcessing;
+
+//==================================================================
+//  OHLC PROCESSING LOG  (ring buffer of last 40 events)
+//==================================================================
+struct SOHLCLogEntry
+{
+    datetime barTime;
+    string   eventName;
+    double   price;
+    double   bid;
+    double   ask;
+};
+SOHLCLogEntry gOHLCLog[40];
+int           gOHLCLogCount = 0;
+
+void LogOHLCEvent(const SVirtualTick &tk)
+{
+    int idx = gOHLCLogCount % 40;
+    gOHLCLog[idx].barTime   = tk.time;
+    gOHLCLog[idx].eventName = gCtx.EventName();
+    gOHLCLog[idx].price     = tk.last;
+    gOHLCLog[idx].bid       = tk.bid;
+    gOHLCLog[idx].ask       = tk.ask;
+    gOHLCLogCount++;
+
+    PrintFormat("OHLC EVENT | %s | %-5s | Bid=%.5f  Ask=%.5f",
+                TimeToString(tk.time, TIME_DATE | TIME_MINUTES | TIME_SECONDS),
+                gCtx.EventName(),
+                tk.bid,
+                tk.ask);
 }
 
+//==================================================================
+//  OnInit
+//==================================================================
+int OnInit()
+{
+    //--- Indicator handles (use PERIOD_M1 to align with virtual feed)
+    atrHandle     = iATR (_Symbol, PERIOD_M1, 14);
+    maHandle      = iMA  (_Symbol, PERIOD_M1, 50,  0, MODE_SMA, PRICE_CLOSE);
+    sidewayHandle = iMA  (_Symbol, PERIOD_M1, 34,  0, MODE_SMA, PRICE_CLOSE);
+    sarHandle     = iSAR (_Symbol, PERIOD_M1, 0.02, 0.2);
+
+    if (atrHandle     == INVALID_HANDLE ||
+        maHandle      == INVALID_HANDLE ||
+        sidewayHandle == INVALID_HANDLE ||
+        sarHandle     == INVALID_HANDLE)
+    {
+        Print("Init error: ", GetLastError());
+        return INIT_FAILED;
+    }
+
+    //--- Bar index logic (unchanged from original)
+    if (BarProcessingMethod == PROCESS_ALL_DELIVERED_TICKS)
+        iBarToUseForProcessing = 0;
+    else if (BarProcessingMethod == ONLY_PROCESS_TICKS_FROM_NEW_M1_BAR)
+        iBarToUseForProcessing = 1;  // use CLOSED bar indicators (see fix #6)
+    else if (BarProcessingMethod == ONLY_PROCESS_TICKS_FROM_NEW_TRADE_TF_BAR)
+        iBarToUseForProcessing = 1;
+
+    PrintFormat("EA USING %s | INDICATOR BAR INDEX = %d",
+                EnumToString(BarProcessingMethod),
+                iBarToUseForProcessing);
+
+    //--- Init virtual feed
+    gFeed.Init(_Symbol);
+    gCtx .Init();
+
+    OutputStatusToScreen();
+    return INIT_SUCCEEDED;
+}
+
+//==================================================================
+//  OnDeinit
+//==================================================================
+void OnDeinit(const int reason)
+{
+    IndicatorRelease(atrHandle);
+    IndicatorRelease(maHandle);
+    IndicatorRelease(sidewayHandle);
+    IndicatorRelease(sarHandle);
+}
+
+//==================================================================
+//  OnTick
+//==================================================================
 void OnTick()
 {
     TicksReceivedCount++;
 
-    // ########################################################
-    // Control EA so that we only process at required intervals (Either 'Every Tick', 'Open Prices' or 'M1 Open Prices')
-    // ########################################################
-
-    bool ProcessThisIteration = false; // Set to false by default and then set to true below if required
-
-    if (BarProcessingMethod == PROCESS_ALL_DELIVERED_TICKS)
-        ProcessThisIteration = true;
-
-    else if (BarProcessingMethod == ONLY_PROCESS_TICKS_FROM_NEW_M1_BAR) // Process trades from any TF, every minute.
+    // ─────────────────────────────────────────────────────────────
+    //  MODE A: OHLC virtual feed
+    //  Each real broker tick pumps the feed.
+    //  For every pending OHLC event we update context, log,
+    //  then run the full processing block — up to 4× per M1 bar.
+    // ─────────────────────────────────────────────────────────────
+    if (BarProcessingMethod == ONLY_PROCESS_TICKS_FROM_NEW_M1_BAR)
     {
-        if (TimeLastTickProcessed != iTime(Symbol(), PERIOD_M1, 0))
+        SVirtualTick vTick;
+        while (gFeed.Next(vTick))
         {
-            ProcessThisIteration = true;
-            TimeLastTickProcessed = iTime(Symbol(), PERIOD_M1, 0);
+            gCtx.Update(vTick);
+            LogOHLCEvent(vTick);          // ← prints event + prices
+
+            TicksProcessedCount++;
+
+            checkEntry();
+            ProcessTradeClosures();
+            ProcessTradeOpens();
+
+            AlertFormat("OHLC %s | %s | Bid=%.5f  Ask=%.5f",
+                        gCtx.EventName(),
+                        Symbol(),
+                        gCtx.Bid(),
+                        gCtx.Ask());
         }
     }
 
-    else if (BarProcessingMethod == ONLY_PROCESS_TICKS_FROM_NEW_TRADE_TF_BAR) // Process when a new bar appears in the TF being used. So the M15 TF is processed once every 15 minutes, the TF60 is processed once every hour etc...
-    {
-        if (TimeLastTickProcessed != iTime(Symbol(), TradeTimeframe, 0)) // TimeLastTickProcessed contains the last Time[0] we processed for this TF. If it's not the same as the current value, we know that we have a new bar in this TF, so need to process
-        {
-            ProcessThisIteration = true;
-            TimeLastTickProcessed = iTime(Symbol(), TradeTimeframe, 0);
-        }
-    }
-
-    // #############################
-    // Process Trades if appropriate
-    // #############################
-
-    if (ProcessThisIteration == true)
+    // ─────────────────────────────────────────────────────────────
+    //  MODE B: Every tick — unchanged
+    // ─────────────────────────────────────────────────────────────
+    else if (BarProcessingMethod == PROCESS_ALL_DELIVERED_TICKS)
     {
         TicksProcessedCount++;
-
         checkEntry();
-
         ProcessTradeClosures();
         ProcessTradeOpens();
-
         Alert("PROCESSING " + Symbol() + " ON " + EnumToString(TradeTimeframe) + " CHART");
     }
 
-    // ############################################
-    // OUTPUT INFORMATION AND METRICS TO THE SCREEN (DO NOT OUTPUT ON EVERY TICK IN PRODUCTION, FOR PERFORMANCE REASONS - DONE HERE FOR ILLUSTRATIVE PURPOSES ONLY)
-    // ############################################
+    // ─────────────────────────────────────────────────────────────
+    //  MODE C: New Trade-TF bar — unchanged
+    // ─────────────────────────────────────────────────────────────
+    else if (BarProcessingMethod == ONLY_PROCESS_TICKS_FROM_NEW_TRADE_TF_BAR)
+    {
+        if (TimeLastTickProcessed != iTime(Symbol(), TradeTimeframe, 0))
+        {
+            TimeLastTickProcessed = iTime(Symbol(), TradeTimeframe, 0);
+            TicksProcessedCount++;
+            checkEntry();
+            ProcessTradeClosures();
+            ProcessTradeOpens();
+            Alert("PROCESSING " + Symbol() + " ON " + EnumToString(TradeTimeframe) + " CHART");
+        }
+    }
 
-    // if(!MQLInfoInteger(MQL_TESTER))
     OutputStatusToScreen();
 }
 
+//==================================================================
+//  STRATEGY STUBS
+//  Replace with your real logic.
+//  Use gCtx.Bid() / gCtx.Ask() / gCtx.Last() for the current price.
+//  Use gCtx.Event() or gCtx.EventName() to know which OHLC point fired.
+//==================================================================
+/*
+void checkEntry()
+{
+    if (!gCtx.IsValid()) return;
+
+    // ── Example: only act on Open and Close events ──────────────
+    // ENUM_OHLC_EVENT ev = gCtx.Event();
+    // if (ev != OHLC_OPEN && ev != OHLC_CLOSE) return;
+
+    // Read indicators at the CLOSED bar (index 1 = the bar whose
+    // OHLC events we are currently processing)
+    double atr[], ma[];
+    ArraySetAsSeries(atr, true);
+    ArraySetAsSeries(ma,  true);
+    if (CopyBuffer(atrHandle, 0, 0, 3, atr) <= 0) return;
+    if (CopyBuffer(maHandle,  0, 0, 3, ma)  <= 0) return;
+
+    double currentATR   = atr[iBarToUseForProcessing];
+    double currentMA    = ma [iBarToUseForProcessing];
+    double currentPrice = gCtx.Last();   // virtual OHLC price
+
+    // ... your entry logic here ...
+}*/
+
 void ProcessTradeClosures()
 {
-    double localBuffer[];
-    ArrayResize(localBuffer, 3);
+    if (!gCtx.IsValid())
+        return;
 
-    // Use CopyBuffer here to copy indicator buffer to local buffer...
+    // virtual TP / SL
+    CheckVirtualStops();
 
-    ArraySetAsSeries(localBuffer, true);
-
-    double currentIndValue = localBuffer[iBarToUseForProcessing];
-    double previousIndValue = localBuffer[iBarToUseForProcessing + 1];
+    // break even + trailing
+    managePosition();
 }
 
 void ProcessTradeOpens()
 {
-    double localBuffer[];
-    ArrayResize(localBuffer, 3);
+    if (!gCtx.IsValid())
+        return;
 
-    // Use CopyBuffer here to copy indicator buffer to local buffer...
+    if (gPendingSignal == SIGNAL_NONE)
+        return;
 
-    ArraySetAsSeries(localBuffer, true);
+    if (PositionsTotal() > 0)
+    {
+        gPendingSignal = SIGNAL_NONE;
+        return;
+    }
 
-    double currentIndValue = localBuffer[iBarToUseForProcessing];
-    double previousIndValue = localBuffer[iBarToUseForProcessing + 1];
+    // optional:
+    // buka cuma di OPEN / CLOSE
+    ENUM_OHLC_EVENT ev = gCtx.Event();
+
+    if (ev != OHLC_OPEN &&
+        ev != OHLC_CLOSE)
+        return;
+
+    bool opened = false;
+
+    if (gPendingSignal == SIGNAL_BUY)
+    {
+        opened = tradeBuy(
+            gPendingSL,
+            gPendingTP,
+            gPendingPrice
+        );
+    }
+    else if (gPendingSignal == SIGNAL_SELL)
+    {
+        opened = tradeSell(
+            gPendingSL,
+            gPendingTP,
+            gPendingPrice
+        );
+    }
+
+    if (opened)
+{
+    Print("OPENED: ", EnumToString(gPendingSignal));
+    gPendingSignal = SIGNAL_NONE;
+}
 }
 
+//==================================================================
+//  OutputStatusToScreen — extended with OHLC log
+//==================================================================
 void OutputStatusToScreen()
 {
     double offsetInHours = (TimeCurrent() - TimeGMT()) / 3600.0;
 
-    string OutputText = "\n\r";
+    string out = "\n\r";
+    out += "MT5 SERVER TIME: " + TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS)
+        + " (UTC/GMT" + StringFormat("%+.1f", offsetInHours) + ")\n\r\n\r";
 
-    OutputText += "MT5 SERVER TIME: " + TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS) + " (OPERATING AT UTC/GMT" + StringFormat("%+.1f", offsetInHours) + ")\n\r\n\r";
+    out += Symbol() + " TICKS RECEIVED:    " + IntegerToString(TicksReceivedCount)  + "\n\r";
+    out += Symbol() + " TICKS PROCESSED:   " + IntegerToString(TicksProcessedCount) + "\n\r";
+    out += "PROCESSING METHOD:  " + EnumToString(BarProcessingMethod) + "\n\r";
+    out += "INDICATOR BAR IDX:  " + IntegerToString(iBarToUseForProcessing)          + "\n\r";
+    out += "TRADING TIMEFRAME:  " + EnumToString(TradeTimeframe)                     + "\n\r\n\r";
 
-    OutputText += Symbol() + " TICKS RECEIVED:   " + IntegerToString(TicksReceivedCount) + "\n\r";
-    OutputText += Symbol() + " TICKS PROCESSED:   " + IntegerToString(TicksProcessedCount) + "\n\r";
-    OutputText += "PROCESSING METHOD:   " + EnumToString(BarProcessingMethod) + "\n\r";
-    OutputText += EnumToString(TradeTimeframe) + " BAR USED FOR PROCESSING INDICATORS / PRICE:   " + IntegerToString(iBarToUseForProcessing) + "\n\r";
-    OutputText += "SYMBOL BEING TRADED:   " + Symbol() + "\n\r";
-    OutputText += "TRADING TIMEFRAME:   " + EnumToString(TradeTimeframe) + "\n\r\n\r";
+    // ── Last 10 OHLC events ──────────────────────────────────────
+    if (BarProcessingMethod == ONLY_PROCESS_TICKS_FROM_NEW_M1_BAR && gOHLCLogCount > 0)
+    {
+        out += "─── LAST OHLC EVENTS ────────────────────────────\n\r";
+        int start = MathMax(0, gOHLCLogCount - 10);
+        for (int i = start; i < gOHLCLogCount; i++)
+        {
+            int idx = i % 40;
+            out += StringFormat("  %s | %-5s | %.5f  (bid=%.5f  ask=%.5f)\n\r",
+                                TimeToString(gOHLCLog[idx].barTime,
+                                             TIME_DATE | TIME_MINUTES | TIME_SECONDS),
+                                gOHLCLog[idx].eventName,
+                                gOHLCLog[idx].price,
+                                gOHLCLog[idx].bid,
+                                gOHLCLog[idx].ask);
+        }
+    }
 
-    Comment(OutputText);
+    // ── Current virtual context ──────────────────────────────────
+    if (gCtx.IsValid())
+    {
+        out += "\n\r── CURRENT VIRTUAL TICK ─────────────────────────\n\r";
+        out += "  Event : " + gCtx.EventName()                              + "\n\r";
+        out += "  Bid   : " + DoubleToString(gCtx.Bid(), _Digits)           + "\n\r";
+        out += "  Ask   : " + DoubleToString(gCtx.Ask(), _Digits)           + "\n\r";
+        out += "  Time  : " + TimeToString(gCtx.Time(), TIME_DATE | TIME_SECONDS) + "\n\r";
+    }
 
-    return;
+    Comment(out);
 }
+
+//==================================================================
+//  AlertFormat helper (Alert() doesn't support printf-style directly)
+//==================================================================
+void AlertFormat(string fmt, string a, string b, double c, double d)
+{
+    Alert(StringFormat(fmt, a, b, c, d));
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 //+------------------------------------------------------------------+
 //| ATR Mean Reversion EA (Complete Version)                        |
@@ -230,21 +649,28 @@ struct VirtualSL
 VirtualSL vsl[];
 
 //+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-    IndicatorRelease(atrHandle);
-    IndicatorRelease(maHandle);
-    IndicatorRelease(sidewayHandle);
-    IndicatorRelease(sarHandle);
-}
-//+------------------------------------------------------------------+
 void checkEntry()
 {
-    managePosition();
-    CheckVirtualStops();
+ if (!gCtx.IsValid())
+        return;
+
+    datetime currentTradeBar =
+        iTime(_Symbol, TradeTimeframe, 0);
+
+    // reset lock tiap bar M15 baru
+    if (currentTradeBar != gLastTradeBar)
+    {
+        gLastTradeBar = currentTradeBar;
+        gSignalLocked = false;
+    }
+
+    // sudah ada signal di M15 ini
+    if (gSignalLocked)
+        return;
 
     if (!isSideways())
         return;
+
     if (PositionsTotal() > 0)
         return;
 
@@ -254,16 +680,16 @@ void checkEntry()
     ArraySetAsSeries(ma, true);
     ArraySetAsSeries(close, true);
 
-    if (CopyBuffer(atrHandle, 0, 0, 2, atr) <= 0)
+    if (CopyBuffer(atrHandle, 0, 0, 3, atr) <= 0)
         return;
-    if (CopyBuffer(maHandle, 0, 0, 2, ma) <= 0)
+    if (CopyBuffer(maHandle, 0, 0, 3, ma) <= 0)
         return;
-    if (CopyClose(_Symbol, _Period, 0, 2, close) <= 0)
+    if (CopyClose(_Symbol, _Period, 0, 3, close) <= 0)
         return;
 
-    double currentATR = atr[0];
-    double currentMA = ma[0];
-    double currentPrice = close[0];
+    double currentATR   = atr[iBarToUseForProcessing];
+    double currentMA    = ma [iBarToUseForProcessing];
+    double currentPrice = gCtx.Last();   // virtual OHLC price
 
     double deviation = MathAbs(currentPrice - currentMA);
     double threshold = currentATR * ATR_Multiplier;
@@ -275,17 +701,33 @@ void checkEntry()
         // SELL
         if (currentPrice > currentMA && deviation > threshold)
         {
-            sl = currentPrice + (currentATR * SL_Multiplier);
-            tp = currentPrice - (currentATR * TP_Multiplier);
-            tradeSell(sl, tp, currentPrice);
+    sl = currentPrice + (currentATR * SL_Multiplier);
+    tp = currentPrice - (currentATR * TP_Multiplier);
+
+    gPendingSignal = SIGNAL_SELL;
+    gPendingSL     = sl;
+    gPendingTP     = tp;
+    gPendingPrice  = currentPrice;
+
+    gSignalLocked  = true;
+
+    return;
         }
 
         // BUY
         if (currentPrice < currentMA && deviation > threshold)
         {
-            sl = currentPrice - (currentATR * SL_Multiplier);
-            tp = currentPrice + (currentATR * TP_Multiplier);
-            tradeBuy(sl, tp, currentPrice);
+    sl = currentPrice - (currentATR * SL_Multiplier);
+    tp = currentPrice + (currentATR * TP_Multiplier);
+
+    gPendingSignal = SIGNAL_BUY;
+    gPendingSL     = sl;
+    gPendingTP     = tp;
+    gPendingPrice  = currentPrice;
+
+    gSignalLocked  = true;
+
+    return;
         }
     }
     else if (useEma)
@@ -293,17 +735,33 @@ void checkEntry()
         // SELL
         if (currentPrice > currentMA && deviation > threshold)
         {
-            sl = currentPrice + (currentATR * SL_Multiplier);
-            tp = currentMA + (currentATR * TP_Gap_Multiplier);
-            tradeSell(sl, tp, currentPrice);
+ sl = currentPrice + (currentATR * SL_Multiplier);
+    tp = currentPrice - (currentATR * TP_Multiplier);
+
+    gPendingSignal = SIGNAL_SELL;
+    gPendingSL     = sl;
+    gPendingTP     = tp;
+    gPendingPrice  = currentPrice;
+
+    gSignalLocked  = true;
+
+    return;
         }
 
         // BUY
         if (currentPrice < currentMA && deviation > threshold)
         {
-            sl = currentPrice - (currentATR * SL_Multiplier);
-            tp = currentMA - (currentATR * TP_Gap_Multiplier);
-            tradeBuy(sl, tp, currentPrice);
+    sl = currentPrice - (currentATR * SL_Multiplier);
+    tp = currentPrice + (currentATR * TP_Multiplier);
+
+    gPendingSignal = SIGNAL_BUY;
+    gPendingSL     = sl;
+    gPendingTP     = tp;
+    gPendingPrice  = currentPrice;
+
+    gSignalLocked  = true;
+
+    return;
         }
     }
     else if (useTrailingStop)
@@ -311,17 +769,33 @@ void checkEntry()
         // SELL
         if (currentPrice > currentMA && deviation > threshold)
         {
-            sl = currentPrice + (currentATR * SL_Multiplier);
-            tp = currentMA + (currentATR * TP_Gap_Multiplier);
-            tradeSell(sl, tp, currentPrice);
+ sl = currentPrice + (currentATR * SL_Multiplier);
+    tp = currentPrice - (currentATR * TP_Multiplier);
+
+    gPendingSignal = SIGNAL_SELL;
+    gPendingSL     = sl;
+    gPendingTP     = tp;
+    gPendingPrice  = currentPrice;
+
+    gSignalLocked  = true;
+
+    return;
         }
 
         // BUY
         if (currentPrice < currentMA && deviation > threshold)
         {
-            sl = currentPrice - (currentATR * SL_Multiplier);
-            tp = currentMA - (currentATR * TP_Gap_Multiplier);
-            tradeBuy(sl, tp, currentPrice);
+    sl = currentPrice - (currentATR * SL_Multiplier);
+    tp = currentPrice + (currentATR * TP_Multiplier);
+
+    gPendingSignal = SIGNAL_BUY;
+    gPendingSL     = sl;
+    gPendingTP     = tp;
+    gPendingPrice  = currentPrice;
+
+    gSignalLocked  = true;
+
+    return;
         }
     }
 }
@@ -501,8 +975,8 @@ void CheckVirtualStops()
 {
     double prevHigh = iHigh(_Symbol, PERIOD_CURRENT, 1);
     double prevLow = iLow(_Symbol, PERIOD_CURRENT, 1);
-    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double bid = gCtx.Bid();
+    double ask = gCtx.Ask();
 
     for (int i = ArraySize(vsl) - 1; i >= 0; i--)
     {
@@ -642,9 +1116,9 @@ void UpdateVirtualBreakEven()
         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
 
         double price =
-            (type == POSITION_TYPE_BUY)
-                ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
-                : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+(type == POSITION_TYPE_BUY)
+? gCtx.Bid()
+: gCtx.Ask();
 
         //================ BUY =================
         if (type == POSITION_TYPE_BUY)
