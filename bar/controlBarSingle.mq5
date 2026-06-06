@@ -15,9 +15,9 @@
    //| OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.           |
    //+--------------------------------------------------------------------------------+
    
-   #property copyright     "Darwinex"
-   #property link          "http://www.darwinex.com"
-   #property description   "Bar Controlling Code (Single Symbol) - Darwinex Advanced MQL Coding Video Series. Author: Martyn Tinsley, Trade Like A Machine Ltd"        
+   #property copyright     "Nugi"
+   #property link          ""
+   #property description   ""        
    
    #property strict
    
