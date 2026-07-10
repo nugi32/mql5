@@ -3,12 +3,8 @@
   "tasks": [
     {
       "label": "Compile Active MQL5",
-      "type": "process",
-      "command": "C:\\Program Files\\MetaTrader 5\\metaeditor64.exe",
-      "args": [
-        "/compile:${file}",
-        "/log:${workspaceFolder}\\compile.log"
-      ],
+      "type": "shell",
+      "command": "WINEPREFIX=$HOME/.mt5 wine \"C:\\Program Files\\MetaTrader 5\\metaeditor64.exe\" /compile:\"$(winepath -w '${file}')\" /log:\"$(winepath -w '${workspaceFolder}')\\\\compile.log\"",
       "group": {
         "kind": "build",
         "isDefault": true
