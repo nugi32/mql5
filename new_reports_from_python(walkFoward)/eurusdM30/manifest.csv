@@ -1,0 +1,22 @@
+run,window,test_year,edge_id,condition,direction,hold_bars,oos_expectancy_r,oos_pf,oos_trades,magic,file
+2010,0001,2014,EURUSD_M30_1,"rsi_14 > 70.0",short,23,0.8977,1.71,438,710001,Experts/eurusdM30/run_2010/EURUSD_M30_run2010_w0001.mq5
+2010,0002,2015,EURUSD_M30_71,"rsi_7 > 80.0 AND stoch_5_3_3_k > 80.0 AND mom_10 > 0.0",short,24,0.7101,1.72,272,710002,Experts/eurusdM30/run_2010/EURUSD_M30_run2010_w0002.mq5
+2010,0003,2016,EURUSD_M30_2,"rsi_7 > 75.0",short,24,0.2647,1.3,783,710003,Experts/eurusdM30/run_2010/EURUSD_M30_run2010_w0003.mq5
+2010,0011,2024,EURUSD_M30_95,"rsi_7 > 70.0 AND stoch_5_3_3_k > 80.0 AND ma_5_sma < close AND mom_10 > 0.0",short,24,0.3048,1.31,979,710004,Experts/eurusdM30/run_2010/EURUSD_M30_run2010_w0011.mq5
+2011,0000,2014,EURUSD_M30_1,"rsi_14 > 70.0",short,23,0.8977,1.71,438,710005,Experts/eurusdM30/run_2011/EURUSD_M30_run2011_w0000.mq5
+2011,0001,2015,EURUSD_M30_71,"rsi_7 > 80.0 AND stoch_5_3_3_k > 80.0 AND mom_10 > 0.0",short,24,0.7101,1.72,272,710006,Experts/eurusdM30/run_2011/EURUSD_M30_run2011_w0001.mq5
+2011,0002,2016,EURUSD_M30_2,"rsi_7 > 75.0",short,24,0.2647,1.3,783,710007,Experts/eurusdM30/run_2011/EURUSD_M30_run2011_w0002.mq5
+2011,0010,2024,EURUSD_M30_95,"rsi_7 > 70.0 AND stoch_5_3_3_k > 80.0 AND ma_5_sma < close AND mom_10 > 0.0",short,24,0.3048,1.31,979,710008,Experts/eurusdM30/run_2011/EURUSD_M30_run2011_w0010.mq5
+2012,0000,2015,EURUSD_M30_71,"rsi_7 > 80.0 AND stoch_5_3_3_k > 80.0 AND mom_10 > 0.0",short,24,0.7101,1.72,272,710009,Experts/eurusdM30/run_2012/EURUSD_M30_run2012_w0000.mq5
+2012,0001,2016,EURUSD_M30_2,"rsi_7 > 75.0",short,24,0.2647,1.3,783,710010,Experts/eurusdM30/run_2012/EURUSD_M30_run2012_w0001.mq5
+2012,0009,2024,EURUSD_M30_95,"rsi_7 > 70.0 AND stoch_5_3_3_k > 80.0 AND ma_5_sma < close AND mom_10 > 0.0",short,24,0.3048,1.31,979,710011,Experts/eurusdM30/run_2012/EURUSD_M30_run2012_w0009.mq5
+2013,0000,2016,EURUSD_M30_2,"rsi_7 > 75.0",short,24,0.2647,1.3,783,710012,Experts/eurusdM30/run_2013/EURUSD_M30_run2013_w0000.mq5
+2013,0008,2024,EURUSD_M30_95,"rsi_7 > 70.0 AND stoch_5_3_3_k > 80.0 AND ma_5_sma < close AND mom_10 > 0.0",short,24,0.3048,1.31,979,710013,Experts/eurusdM30/run_2013/EURUSD_M30_run2013_w0008.mq5
+2014,0007,2024,EURUSD_M30_95,"rsi_7 > 70.0 AND stoch_5_3_3_k > 80.0 AND ma_5_sma < close AND mom_10 > 0.0",short,24,0.3048,1.31,979,710014,Experts/eurusdM30/run_2014/EURUSD_M30_run2014_w0007.mq5
+2015,0006,2024,EURUSD_M30_95,"rsi_7 > 70.0 AND stoch_5_3_3_k > 80.0 AND ma_5_sma < close AND mom_10 > 0.0",short,24,0.3048,1.31,979,710015,Experts/eurusdM30/run_2015/EURUSD_M30_run2015_w0006.mq5
+2016,0005,2024,EURUSD_M30_95,"rsi_7 > 70.0 AND stoch_5_3_3_k > 80.0 AND ma_5_sma < close AND mom_10 > 0.0",short,24,0.3048,1.31,979,710016,Experts/eurusdM30/run_2016/EURUSD_M30_run2016_w0005.mq5
+2017,0004,2024,EURUSD_M30_95,"rsi_7 > 70.0 AND stoch_5_3_3_k > 80.0 AND ma_5_sma < close AND mom_10 > 0.0",short,24,0.3048,1.31,979,710017,Experts/eurusdM30/run_2017/EURUSD_M30_run2017_w0004.mq5
+2018,0003,2024,EURUSD_M30_95,"rsi_7 > 70.0 AND stoch_5_3_3_k > 80.0 AND ma_5_sma < close AND mom_10 > 0.0",short,24,0.3048,1.31,979,710018,Experts/eurusdM30/run_2018/EURUSD_M30_run2018_w0003.mq5
+2019,0002,2024,EURUSD_M30_95,"rsi_7 > 70.0 AND stoch_5_3_3_k > 80.0 AND ma_5_sma < close AND mom_10 > 0.0",short,24,0.3048,1.31,979,710019,Experts/eurusdM30/run_2019/EURUSD_M30_run2019_w0002.mq5
+2020,0001,2024,EURUSD_M30_95,"rsi_7 > 70.0 AND stoch_5_3_3_k > 80.0 AND ma_5_sma < close AND mom_10 > 0.0",short,24,0.3048,1.31,979,710020,Experts/eurusdM30/run_2020/EURUSD_M30_run2020_w0001.mq5
+2021,0000,2024,EURUSD_M30_95,"rsi_7 > 70.0 AND stoch_5_3_3_k > 80.0 AND ma_5_sma < close AND mom_10 > 0.0",short,24,0.3048,1.31,979,710021,Experts/eurusdM30/run_2021/EURUSD_M30_run2021_w0000.mq5
