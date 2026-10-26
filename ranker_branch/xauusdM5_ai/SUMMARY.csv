@@ -1,0 +1,6 @@
+run,window,test_year,file,edge,condition,hold_bars,test_exp_r,test_pf,test_n,magic
+run_2010,window_0005,2018,run_2010/window_0005/EA_run2010_w0005_XAUUSD_M5_97.mq5,XAUUSD_M5_97,stoch_5_3_3_k < 20.0 AND cci_14 < -100.0 AND ps_dist_sess_l_atr > 0.5 AND volregime_atr_ratio < 0.8,144,0.6593,1.28,232,9000005
+run_2010,window_0009,2022,run_2010/window_0009/EA_run2010_w0009_XAUUSD_M5_58.mq5,XAUUSD_M5_58,cci_14 < -100.0 AND ps_dist_sess_l_atr > -1.0 AND volregime_atr_pctl < 30.0,139,1.4948,1.21,839,9000009
+run_2010,window_0010,2023,run_2010/window_0010/EA_run2010_w0010_XAUUSD_M5_1.mq5,XAUUSD_M5_1,rsi_21 < 20.0,144,1.6948,1.31,71,9000010
+run_2010,window_0011,2024,run_2010/window_0011/EA_run2010_w0011_XAUUSD_M5_9.mq5,XAUUSD_M5_9,cci_14 < -100.0 AND rsi_21 < 25.0,59,0.8218,1.29,336,9000011
+run_2010,window_0012,2025,run_2010/window_0012/EA_run2010_w0012_XAUUSD_M5_11.mq5,XAUUSD_M5_11,rsi_21 < 25.0 AND mom_10 > -5.0,116,1.2958,1.65,328,9000012
